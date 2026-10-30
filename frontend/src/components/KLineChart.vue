@@ -46,8 +46,9 @@ const props = defineProps({
   period: { type: String, default: '日K' }, // 日K / 周K / 月K
   height: { type: String, default: '300px' },
   indicator: { type: String, default: 'macd' }, // none / vol / macd / kdj / rsi（实际读 chartPrefs）
+  rangeRequest: { type: Object, default: null },
 })
-const emit = defineEmits(['count'])
+const emit = defineEmits(['count', 'visible-range'])
 
 const UP = '#ef4444'
 const DOWN = '#16a34a'
@@ -115,6 +116,7 @@ function onDataZoom() {
       zoomWin.s = v.s
       zoomWin.e = v.e
       applyRangeMarks()
+      emitVisibleRange()
     }
   })
 }
@@ -145,6 +147,70 @@ function windowRange(n) {
   const i1 = Math.min(n - 1, Math.ceil((zoomWin.e / 100) * (n - 1)))
   return { i0: Math.min(i0, i1), i1: Math.max(i0, i1) }
 }
+
+function emitVisibleRange() {
+  const { i0, i1 } = windowRange(series.value.kline.length)
+  emit('visible-range', { startIndex: i0, endIndex: i1, period: props.period })
+}
+
+watch(() => series.value.dates, emitVisibleRange, { immediate: true })
+
+function applyDateRange(range) {
+  const dates = series.value.dates
+  if (!dates.length || !Array.isArray(range) || range.length !== 2) return
+  const startTime = Date.parse(`${range[0]}T00:00:00`)
+  const endTime = Date.parse(`${range[1]}T23:59:59`)
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return
+
+  let startIndex = dates.findIndex((value) => Date.parse(value) >= startTime)
+  if (startIndex < 0) startIndex = dates.length - 1
+  let endIndex = -1
+  for (let i = dates.length - 1; i >= 0; i--) {
+    if (Date.parse(dates[i]) <= endTime) {
+      endIndex = i
+      break
+    }
+  }
+  if (endIndex < 0) endIndex = 0
+
+  if (startIndex > endIndex) {
+    let nearestIndex = 0
+    let nearestDistance = Infinity
+    dates.forEach((value, index) => {
+      const timestamp = Date.parse(value)
+      const distance = timestamp < startTime
+        ? startTime - timestamp
+        : timestamp > endTime
+          ? timestamp - endTime
+          : 0
+      if (distance < nearestDistance) {
+        nearestIndex = index
+        nearestDistance = distance
+      }
+    })
+    startIndex = nearestIndex
+    endIndex = nearestIndex
+  }
+
+  const lastIndex = dates.length - 1
+  const start = lastIndex ? (startIndex / lastIndex) * 100 : 0
+  const end = lastIndex ? (endIndex / lastIndex) * 100 : 100
+  zoomWin.s = start
+  zoomWin.e = end
+  const inst = chartEl.value?.chart
+  if (inst && !inst.isDisposed()) inst.dispatchAction({ type: 'dataZoom', start, end })
+  applyRangeMarks()
+  emitVisibleRange()
+}
+
+watch(
+  [() => props.rangeRequest?.token, () => props.stock?.code, () => series.value.dates.length],
+  ([token]) => {
+    const request = props.rangeRequest
+    if (token != null && request?.dates) applyDateRange(request.dates)
+  },
+  { immediate: true }
+)
 
 // 当前可见区间的最高/最低。
 // 默认：两根短箭头指向取到极值的那根 K 线；

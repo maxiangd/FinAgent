@@ -59,10 +59,25 @@
       <div class="market-head">
         <span class="market-title">
           行情图表
-          <span class="faint">近 {{ kCount }} 根 · AKShare 前复权</span>
+          <span class="faint">当前窗口摘要 · 随图表视窗变化</span>
         </span>
         <div class="market-tools">
           <el-segmented v-model="kPeriod" :options="periodOptions" size="small" />
+          <el-date-picker
+            v-model="chartDateRange"
+            class="date-range-picker"
+            type="daterange"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            :clearable="false"
+            :editable="false"
+            :disabled="!selected || chartLoading"
+            size="small"
+            @change="onDateRangeChange"
+          />
           <el-button text size="small" :icon="chartOpen ? Fold : Expand" @click="chartOpen = !chartOpen">
             {{ chartOpen ? '收起' : '展开' }}
           </el-button>
@@ -74,6 +89,10 @@
             <div v-for="st in marketStats" :key="st.label" class="ms-item">
               <span class="faint">{{ st.label }}</span>
               <b :class="st.cls || undefined">{{ st.value }}</b>
+              <div v-if="st.detailLines" class="ms-detail">
+                <div v-for="line in st.detailLines" :key="line">{{ line }}</div>
+              </div>
+              <small v-else-if="st.detail" class="ms-detail">{{ st.detail }}</small>
             </div>
           </div>
           <div class="market-chart">
@@ -92,10 +111,19 @@
             </span>
             </div>
             <!-- key 仅含周期：切周期重建；切指标不重建，保留拖拽窗口 -->
-            <KLineChart :key="`${kPeriod}`" :stock="chartStock" :period="kPeriod" height="320px" :indicator="indicator" @count="kCount = $event" />
+            <KLineChart
+              :key="`${kPeriod}`"
+              :stock="chartStock"
+              :period="kPeriod"
+              height="320px"
+              :indicator="indicator"
+              :range-request="dateRangeRequest"
+              @count="kCount = $event"
+              @visible-range="onVisibleRange"
+            />
             <div v-if="chartLoading" class="market-foot faint">正在加载 {{ kPeriod }} 数据…</div>
             <div v-else class="market-foot faint">
-              当前周期：{{ kPeriod }} · 共 {{ kCount }} 根 · 数据源：AKShare · 最近：{{ lastKDate }} · 收：{{ lastKClose }} 元
+              当前视窗：{{ lastKDateStart }} 至 {{ lastKDate }} · {{ visibleBarCount }} 根{{ kPeriod }} · 全部 {{ kCount }} 根 · 窗口末收 {{ lastKClose }} 元
             </div>
           </div>
         </div>
@@ -173,6 +201,14 @@ const kCount = ref(0)
 const selected = computed(() => state.selected)
 const chartBars = ref(null)
 const chartLoading = ref(false)
+const visibleRange = ref({ startIndex: 0, endIndex: 0 })
+const chartDateRanges = ref({ '日K': null, '周K': null, '月K': null })
+const chartDateRange = computed({
+  get: () => chartDateRanges.value[kPeriod.value],
+  set: (range) => { chartDateRanges.value[kPeriod.value] = range },
+})
+const dateRangeRequest = ref(null)
+let dateRangeRequestId = 0
 let chartRequestId = 0
 const chartStock = computed(() => {
   const stock = selected.value
@@ -185,6 +221,27 @@ const chartStock = computed(() => {
 })
 const completedData = (s) => state.completed[s.key] || null
 const isCurrent = (i) => state.currentIndex === i
+
+function onVisibleRange(range) {
+  const period = range.period || kPeriod.value
+  if (period !== kPeriod.value) return
+  visibleRange.value = range
+  const dates = chartStock.value?.dates
+  const start = dates?.[range.startIndex]
+  const end = dates?.[range.endIndex]
+  if (start && end) chartDateRanges.value[period] = [start, end]
+}
+
+function requestDateRange(range) {
+  if (!Array.isArray(range) || range.length !== 2 || !range[0] || !range[1]) return
+  chartDateRange.value = [...range]
+  dateRangeRequestId += 1
+  dateRangeRequest.value = { token: dateRangeRequestId, dates: [...range] }
+}
+
+function onDateRangeChange(range) {
+  requestDateRange(range)
+}
 
 const fmt = (v, n = 2) => (v == null || Number.isNaN(Number(v)) ? '暂无' : Number(v).toFixed(n))
 const fmtPct = (v) => (v == null || Number.isNaN(Number(v)) ? '暂无' : `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`)
@@ -202,14 +259,37 @@ function volRatioInfo(v) {
   return { text: '明显缩量', cls: 'down' }
 }
 
-// 行情图表面板底部信息行（最近交易日 / 收盘价）
-const lastKDate = computed(() => chartStock.value?.dates?.at(-1) ?? '-')
+// 统计数据始终取图表当前可见的 K 线范围。
+const visibleData = computed(() => {
+  const stock = chartStock.value
+  const kline = stock?.kline
+  const dates = stock?.dates
+  if (!Array.isArray(kline) || !kline.length || !Array.isArray(dates)) {
+    return { kline: [], dates: [] }
+  }
+  const maxIndex = kline.length - 1
+  const start = Math.max(0, Math.min(Number(visibleRange.value.startIndex) || 0, maxIndex))
+  const end = Math.max(start, Math.min(Number(visibleRange.value.endIndex) || 0, maxIndex))
+  return { kline: kline.slice(start, end + 1), dates: dates.slice(start, end + 1) }
+})
+const visibleBarCount = computed(() => visibleData.value.kline.length)
+const lastKDateStart = computed(() => visibleData.value.dates[0] ?? '-')
+const lastKDate = computed(() => visibleData.value.dates.at(-1) ?? '-')
 const lastKClose = computed(() => {
-  const k = chartStock.value?.kline
+  const k = visibleData.value.kline
   return k?.length ? Number(k[k.length - 1].close).toFixed(2) : '-'
 })
 
-watch([kPeriod, () => selected.value?.code], async ([period, code]) => {
+watch([kPeriod, () => selected.value?.code], async ([period, code], [oldPeriod, oldCode]) => {
+  if (oldCode && oldCode !== code) {
+    chartDateRanges.value = { '日K': null, '周K': null, '月K': null }
+    dateRangeRequest.value = null
+  } else if (oldPeriod && oldPeriod !== period) {
+    const savedRange = chartDateRanges.value[period]
+    if (savedRange?.length === 2) requestDateRange(savedRange)
+    else dateRangeRequest.value = null
+  }
+
   const requestId = ++chartRequestId
   chartBars.value = null
   chartLoading.value = Boolean(code && period !== '日K')
@@ -228,26 +308,80 @@ watch([kPeriod, () => selected.value?.code], async ([period, code]) => {
 
 // 行情图表面板左侧的关键指标
 const marketStats = computed(() => {
-  const s = state.selected
-  if (!s || !s.kline?.length) return []
-  const k = s.kline
+  const { kline: k, dates } = visibleData.value
+  if (!k.length) return []
+  const first = k[0]
   const last = k[k.length - 1]
-  const pre = k.length > 1 ? k[k.length - 2] : last
-  const closes = k.map((d) => d.close)
-  const maN = (n) => (closes.length >= n ? closes.slice(-n).reduce((a, b) => a + b, 0) / n : null)
-  const pct = ((last.close - pre.close) / pre.close) * 100
-  const upDown = pct >= 0 ? 'up' : 'down'
-  const maColor = (v) => (v != null ? (last.close >= v ? 'up' : 'down') : '')
-  const vol5 = +(k.slice(-5).reduce((a, d) => a + d.volume, 0) / 5).toFixed(0)
+  const windowChange = k.length > 1 && first.close
+    ? ((last.close - first.close) / first.close) * 100
+    : null
+  const windowPriceChange = k.length > 1 ? last.close - first.close : null
+  const windowAverage = k.reduce((sum, bar) => sum + bar.close, 0) / k.length
+  const windowPriceStdDev = k.length > 1
+    ? Math.sqrt(k.reduce((sum, bar) => sum + (bar.close - windowAverage) ** 2, 0) / k.length)
+    : null
+  const relativeWindowPriceStdDev = windowPriceStdDev != null && windowAverage > 0
+    ? (windowPriceStdDev / windowAverage) * 100
+    : null
+
+  let peakClose = first.close
+  let peakIndex = 0
+  let maxDrawdown = k.length > 1 ? 0 : null
+  let drawdownDetailLines = null
+  let troughClose = first.close
+  let troughIndex = 0
+  let maxRunup = k.length > 1 ? 0 : null
+  let runupDetailLines = null
+  for (let i = 1; i < k.length; i += 1) {
+    const bar = k[i]
+    if (bar.close > peakClose) {
+      peakClose = bar.close
+      peakIndex = i
+    }
+    if (maxDrawdown != null && peakClose > 0) {
+      const drawdown = ((bar.close - peakClose) / peakClose) * 100
+      if (drawdown < maxDrawdown) {
+        maxDrawdown = drawdown
+        drawdownDetailLines = [
+          `峰值日 ${dates[peakIndex]}（${k[peakIndex].close.toFixed(2)} 元）`,
+          `谷值日 ${dates[i]}（${bar.close.toFixed(2)} 元）`,
+        ]
+      }
+    }
+
+    if (bar.close < troughClose) {
+      troughClose = bar.close
+      troughIndex = i
+    }
+    if (maxRunup != null && troughClose > 0) {
+      const runup = ((bar.close - troughClose) / troughClose) * 100
+      if (runup > maxRunup) {
+        maxRunup = runup
+        runupDetailLines = [
+          `谷值日 ${dates[troughIndex]}（${k[troughIndex].close.toFixed(2)} 元）`,
+          `峰值日 ${dates[i]}（${bar.close.toFixed(2)} 元）`,
+        ]
+      }
+    }
+  }
+  const drawdownDetail = maxDrawdown == null || drawdownDetailLines
+    ? null
+    : '区间内无收盘回撤'
+  const runupDetail = maxRunup == null || runupDetailLines
+    ? null
+    : '区间内无收盘上行'
+
   return [
-    { label: '最新价', value: `${last.close.toFixed(2)} 元`, cls: upDown },
-    { label: '涨跌幅', value: `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`, cls: upDown },
-    { label: '区间最高', value: Math.max(...k.map((d) => d.high)).toFixed(2) },
-    { label: '区间最低', value: Math.min(...k.map((d) => d.low)).toFixed(2) },
-    { label: 'MA5', value: maN(5)?.toFixed(2) ?? '-', cls: maColor(maN(5)) },
-    { label: 'MA10', value: maN(10)?.toFixed(2) ?? '-', cls: maColor(maN(10)) },
-    { label: 'MA20', value: maN(20)?.toFixed(2) ?? '-', cls: maColor(maN(20)) },
-    { label: '5 日均量', value: `${vol5} 万手` },
+    { label: '窗口涨幅', value: windowChange == null ? '—' : fmtPct(windowChange), cls: windowChange == null ? '' : windowChange >= 0 ? 'up' : 'down' },
+    { label: '窗口涨跌额', value: windowPriceChange == null ? '—' : `${windowPriceChange >= 0 ? '+' : ''}${windowPriceChange.toFixed(2)} 元`, cls: windowPriceChange == null ? '' : windowPriceChange >= 0 ? 'up' : 'down' },
+    { label: '收盘最大回撤', value: maxDrawdown == null ? '—' : fmtPct(maxDrawdown), cls: maxDrawdown != null && maxDrawdown < 0 ? 'down' : '', detail: drawdownDetail, detailLines: drawdownDetailLines },
+    { label: '收盘最大涨幅', value: maxRunup == null ? '—' : fmtPct(maxRunup), cls: maxRunup != null && maxRunup > 0 ? 'up' : '', detail: runupDetail, detailLines: runupDetailLines },
+    {
+      label: '围绕窗口均价波动值',
+      value: windowPriceStdDev == null ? '—' : `${windowPriceStdDev.toFixed(2)} 元`,
+      detail: relativeWindowPriceStdDev == null ? null : `围绕窗口均价波动率 ${relativeWindowPriceStdDev.toFixed(2)}%`,
+    },
+    { label: '窗口均价', value: `${windowAverage.toFixed(2)} 元` },
   ]
 })
 
@@ -405,6 +539,8 @@ loadByCode('600519')
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 12px 0 6px;
 }
 .market-title {
@@ -419,7 +555,12 @@ loadByCode('600519')
 .market-tools {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
+}
+.date-range-picker {
+  width: 270px;
 }
 .market-foot {
   margin-top: 6px;
@@ -441,6 +582,7 @@ loadByCode('600519')
 }
 .ms-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
@@ -451,6 +593,18 @@ loadByCode('600519')
 .ms-item b {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+.ms-detail {
+  flex: 0 0 100%;
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  text-align: center;
+}
+.ms-detail div + div {
+  margin-top: 2px;
 }
 .market-chart {
   flex: 1;
