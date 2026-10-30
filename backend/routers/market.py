@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,10 +23,14 @@ async def search(q: str, limit: int = 8):
 
 
 @router.get("/stock/{code}/kline")
-async def kline(code: str, limit: int = 520):
+async def kline(
+    code: str,
+    period: Literal["daily", "weekly", "monthly"] = "daily",
+    limit: Optional[int] = None,
+):
     """获取股票 K 线数据。"""
     try:
-        return await asyncio.to_thread(market_service.get_kline, code, limit)
+        return await asyncio.to_thread(market_service.get_kline, code, limit, period)
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001

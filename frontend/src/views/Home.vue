@@ -59,7 +59,7 @@
       <div class="market-head">
         <span class="market-title">
           行情图表
-          <span class="faint">近 520 个交易日 · AKShare 前复权</span>
+          <span class="faint">近 {{ kCount }} 根 · AKShare 前复权</span>
         </span>
         <div class="market-tools">
           <el-segmented v-model="kPeriod" :options="periodOptions" size="small" />
@@ -92,8 +92,9 @@
             </span>
             </div>
             <!-- key 仅含周期：切周期重建；切指标不重建，保留拖拽窗口 -->
-            <KLineChart :key="`${kPeriod}`" :stock="selected" :period="kPeriod" height="320px" :indicator="indicator" @count="kCount = $event" />
-            <div class="market-foot faint">
+            <KLineChart :key="`${kPeriod}`" :stock="chartStock" :period="kPeriod" height="320px" :indicator="indicator" @count="kCount = $event" />
+            <div v-if="chartLoading" class="market-foot faint">正在加载 {{ kPeriod }} 数据…</div>
+            <div v-else class="market-foot faint">
               当前周期：{{ kPeriod }} · 共 {{ kCount }} 根 · 数据源：AKShare · 最近：{{ lastKDate }} · 收：{{ lastKClose }} 元
             </div>
           </div>
@@ -146,12 +147,12 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
 import { state, startSimulation, stopSimulation, selectStock, chartPrefs } from '../features/analysis/pipeline'
-import { loadStock, searchStock, showApiError } from '../api/market'
+import { fetchKline, loadStock, searchStock, showApiError } from '../api/market'
 import StageProgress from '../components/StageProgress.vue'
 import StageRender from '../components/StageRender.vue'
 import KLineChart from '../components/KLineChart.vue'
@@ -166,9 +167,22 @@ let searchTimer = null
 const chartOpen = ref(true)
 const kPeriod = ref('日K')
 const periodOptions = ['日K', '周K', '月K']
+const apiPeriod = { 日K: 'daily', 周K: 'weekly', 月K: 'monthly' }
 const indicator = ref('macd')
-const kCount = ref(520)
+const kCount = ref(0)
 const selected = computed(() => state.selected)
+const chartBars = ref(null)
+const chartLoading = ref(false)
+let chartRequestId = 0
+const chartStock = computed(() => {
+  const stock = selected.value
+  const bars = chartBars.value
+  if (!stock || kPeriod.value === '日K') return stock
+  if (!bars || bars.code !== stock.code || bars.period !== kPeriod.value) {
+    return { ...stock, kline: [], dates: [], klinePeriod: kPeriod.value }
+  }
+  return { ...stock, kline: bars.items, dates: bars.dates, klinePeriod: kPeriod.value }
+})
 const completedData = (s) => state.completed[s.key] || null
 const isCurrent = (i) => state.currentIndex === i
 
@@ -189,10 +203,27 @@ function volRatioInfo(v) {
 }
 
 // 行情图表面板底部信息行（最近交易日 / 收盘价）
-const lastKDate = computed(() => state.selected?.dates?.at(-1) ?? '-')
+const lastKDate = computed(() => chartStock.value?.dates?.at(-1) ?? '-')
 const lastKClose = computed(() => {
-  const k = state.selected?.kline
+  const k = chartStock.value?.kline
   return k?.length ? Number(k[k.length - 1].close).toFixed(2) : '-'
+})
+
+watch([kPeriod, () => selected.value?.code], async ([period, code]) => {
+  const requestId = ++chartRequestId
+  chartBars.value = null
+  chartLoading.value = Boolean(code && period !== '日K')
+  if (!code || period === '日K') return
+
+  try {
+    const data = await fetchKline(code, apiPeriod[period])
+    if (requestId !== chartRequestId) return
+    chartBars.value = { code, period, items: data.items, dates: data.dates }
+  } catch (e) {
+    if (requestId === chartRequestId) showApiError(e)
+  } finally {
+    if (requestId === chartRequestId) chartLoading.value = false
+  }
 })
 
 // 行情图表面板左侧的关键指标

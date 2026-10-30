@@ -2,7 +2,7 @@
 
 数据来源：
 - 股票名称：东财代码表。
-- K 线：新浪为主，东财为备用。
+- K 线：日线新浪为主、腾讯/东财备用；周/月线雪球为主、腾讯备用（东财行情接口在部分网络下不可达）。
 - 财务指标：新浪财务指标接口。
 - 行情报价：腾讯行情；报价缺失时用 K 线收盘价兜底。
 - 新闻：东财个股新闻，保留原始标题供后续分析。
@@ -18,16 +18,40 @@
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 import threading
 import time
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone
+from pathlib import Path
 
 import akshare as ak
 import pandas as pd
+import requests
+from dotenv import load_dotenv
 
 logger = logging.getLogger("finagent.market")
+
+# 从项目根目录读取 .env，不受启动 Uvicorn 时所在目录影响。
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+
+
+def _kline_limit_from_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("%s must be an integer; using default %s", name, default)
+        value = default
+    return min(max(value, 1), 5000)
+
+
+KLINE_LIMITS = {
+    "daily": _kline_limit_from_env("KLINE_DAILY_LIMIT", 520),
+    "weekly": _kline_limit_from_env("KLINE_WEEKLY_LIMIT", 260),
+    "monthly": _kline_limit_from_env("KLINE_MONTHLY_LIMIT", 120),
+}
 
 # ---------- 进程级缓存（TTL） ----------
 _cache: dict[str, tuple[float, object]] = {}
@@ -152,17 +176,122 @@ def search_stock(q: str, limit: int = 8) -> list[dict]:
     return out[:limit]
 
 
-# ---------- K线（新浪 → 腾讯 → 东财，依次回退） ----------
+# ---------- K线（日线：新浪 → 腾讯 → 东财；周线/月线：雪球 → 腾讯） ----------
 _SINA_COLS = {"date": "date", "open": "open", "close": "close", "high": "high", "low": "low", "volume": "volume"}
 _EM_COLS = {"date": "日期", "open": "开盘", "close": "收盘", "high": "最高", "low": "最低", "volume": "成交量"}
 
+_CST = timezone(timedelta(hours=8))
+_XQ_KLINE_URL = "https://stock.xueqiu.com/v5/stock/chart/kline.json"
+_XQ_LOCK = threading.Lock()
+_xq_session: requests.Session | None = None
+
+
+def _xq_client() -> requests.Session:
+    """雪球接口需要登录态 cookie，首次调用时从首页换取并复用。"""
+    global _xq_session
+    with _XQ_LOCK:
+        if _xq_session is None:
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer": "https://xueqiu.com/",
+            })
+            session.get("https://xueqiu.com/", timeout=10)
+            _xq_session = session
+        return _xq_session
+
+
+def _xq_reset() -> None:
+    """cookie 失效时丢弃连接，下次调用重新换票。"""
+    global _xq_session
+    with _XQ_LOCK:
+        _xq_session = None
+
+
+def _xq_symbol(code: str, prefix: str) -> str:
+    return ("SH" if prefix == "sh" else "SZ" if prefix == "sz" else "BJ") + code
+
+
+def _fetch_xq_kline(code: str, prefix: str, period: str, limit: int) -> pd.DataFrame:
+    """雪球周/月线，type=before 为前复权（乘性，与新浪日线口径一致）。"""
+    params = {
+        "symbol": _xq_symbol(code, prefix),
+        "begin": int(time.time() * 1000),
+        # 雪球周期取 week/month，与内部 weekly/monthly 命名不同
+        "period": "week" if period == "weekly" else "month",
+        "type": "before",
+        "count": -limit,
+        "indicator": "kline",
+    }
+    resp = _xq_client().get(_XQ_KLINE_URL, params=params, timeout=10)
+    if resp.status_code in (400, 401):
+        _xq_reset()
+        resp = _xq_client().get(_XQ_KLINE_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json().get("data") or {}
+    items, cols = data.get("item") or [], data.get("column") or []
+    if not items:
+        raise LookupError("empty response")
+    idx = {c: i for i, c in enumerate(cols)}
+    return pd.DataFrame([
+        {
+            "date": pd.Timestamp(it[idx["timestamp"]], unit="ms", tz=_CST).strftime("%Y-%m-%d"),
+            "open": it[idx["open"]],
+            "close": it[idx["close"]],
+            "high": it[idx["high"]],
+            "low": it[idx["low"]],
+            "volume": it[idx["volume"]],
+        }
+        for it in items
+    ])
+
+
+def _fetch_tx_kline(symbol: str, period: str, start: str, end: str, limit: int) -> pd.DataFrame:
+    """腾讯周/月线兜底。返回行格式：[日期, 开, 收, 高, 低, 成交量(手), ...]。"""
+    tx_period = "week" if period == "weekly" else "month"
+    params = {
+        "_var": f"kline_{tx_period}qfq",
+        # 腾讯要求日期带横线，传 20200201 这种格式会返回 param error
+        "param": f"{symbol},{tx_period},{start[:4]}-{start[4:6]}-{start[6:]},{end[:4]}-{end[4:6]}-{end[6:]},{min(max(limit, 1), 2000)},qfq",
+        "r": "0.82",
+    }
+    resp = requests.get(
+        "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
+        params=params,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    body = resp.text.split("=", 1)[1] if "=" in resp.text else resp.text
+    node = (json.loads(body).get("data") or {}).get(symbol) or {}
+    rows = node.get(f"qfq{tx_period}") or node.get(tx_period) or []
+    if not rows:
+        raise LookupError("empty response")
+    return pd.DataFrame([
+        {
+            "date": str(r[0])[:10],
+            "open": r[1],
+            "close": r[2],
+            "high": r[3],
+            "low": r[4],
+            # 腾讯成交量单位为手，统一换算成股，与新浪/雪球一致
+            "volume": float(r[5]) * 100 if str(r[5]).lower() not in ("nan", "none", "") else 0,
+        }
+        for r in rows[-limit:]
+    ])
+
 
 @cached("kline", 300)
-def get_kline(code: str, limit: int = 520):
-    """获取日 K 线。新浪为主源，腾讯次之，东财兜底。"""
+def get_kline(code: str, limit=None, period: str = "daily"):
+    """获取指定数量的前复权日线、周线或月线。"""
+    period = str(period).lower()
+    if period not in KLINE_LIMITS:
+        raise ValueError("period must be daily, weekly, or monthly")
+    limit = KLINE_LIMITS[period] if limit is None else min(max(int(limit), 1), 5000)
     code = code.strip()
     end = date.today()
-    start = end - timedelta(days=1100)
+    days_per_bar = {"daily": 2.2, "weekly": 8.5, "monthly": 37}[period]
+    lookback_days = max(1100 if period == "daily" else 0, int(limit * days_per_bar) + 45)
+    start = end - timedelta(days=lookback_days)
     s, e = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
 
     if code.startswith(("6", "9")):
@@ -173,21 +302,34 @@ def get_kline(code: str, limit: int = 520):
         prefix = "bj"
     symbol = prefix + code
 
-    sources = [
-        ("新浪", lambda: ak.stock_zh_a_daily(symbol=symbol, start_date=s, end_date=e, adjust="qfq"), _SINA_COLS),
-        ("腾讯", lambda: ak.stock_zh_a_hist_tx(symbol=symbol, start_date=s, end_date=e, adjust="qfq"), _SINA_COLS),
-        ("东财", lambda: ak.stock_zh_a_hist(symbol=code, period="daily", start_date=s, end_date=e, adjust="qfq"), _EM_COLS),
-    ]
+    if period == "daily":
+        sources = [
+            ("新浪", lambda: ak.stock_zh_a_daily(symbol=symbol, start_date=s, end_date=e, adjust="qfq"), _SINA_COLS),
+            ("腾讯", lambda: ak.stock_zh_a_hist_tx(symbol=symbol, start_date=s, end_date=e, adjust="qfq"), _SINA_COLS),
+            ("东财", lambda: ak.stock_zh_a_hist(symbol=code, period="daily", start_date=s, end_date=e, adjust="qfq"), _EM_COLS),
+        ]
+    else:
+        # 东财行情接口在部分网络下直接断连，周/月线改走雪球（真实周期K线，非日线聚合）
+        sources = [
+            ("雪球", lambda: _fetch_xq_kline(code, prefix, period, limit), _SINA_COLS),
+            ("腾讯", lambda: _fetch_tx_kline(symbol, period, s, e, limit), _SINA_COLS),
+        ]
 
     df, cols, errors = None, None, []
-    for name, fetch, colmap in sources:
-        try:
-            df = _retry(fetch, delay=0.8)
-            cols = colmap
-            break
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            logger.warning("%s %s K线失败（%s）", code, name, f"{type(exc).__name__}: {exc}")
+
+    def try_sources(candidates):
+        for name, fetch, colmap in candidates:
+            try:
+                result = _retry(fetch, delay=0.8)
+                if result is None or result.empty:
+                    raise LookupError("empty response")
+                return result, colmap
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+                logger.warning("%s %s K线失败（%s）", code, name, f"{type(exc).__name__}: {exc}")
+        return None, None
+
+    df, cols = try_sources(sources)
 
     if df is None or df.empty:
         raise LookupError(f"{code} 未获取到 K 线数据 | " + " | ".join(errors))
@@ -204,7 +346,7 @@ def get_kline(code: str, limit: int = 520):
             "volume": _num(row[cols["volume"]], 0),
         })
 
-    return {"code": code, "name": get_name(code), "dates": dates, "items": items}
+    return {"code": code, "name": get_name(code), "period": period, "limit": limit, "dates": dates, "items": items}
 
 
 # ---------- 财务指标（新浪财务分析指标） ----------

@@ -21,9 +21,9 @@ export async function fetchSnapshot(code) {
   return request(`/api/stock/${code}/snapshot`)
 }
 
-// 日K 线（前复权，默认近 ~520 个交易日），填充 selected.kline / dates
-export async function fetchKline(code, limit = 520) {
-  return request(`/api/stock/${code}/kline?limit=${limit}`)
+// 获取指定周期的前复权 K 线；根数由后端环境变量配置
+export async function fetchKline(code, period = 'daily') {
+  return request(`/api/stock/${code}/kline?period=${period}`)
 }
 
 // 按代码或名称搜索股票，返回 [{code, name}] 候选

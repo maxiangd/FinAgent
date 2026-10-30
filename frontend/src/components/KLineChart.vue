@@ -58,57 +58,17 @@ const maRichStyle = Object.fromEntries(
   MA_PERIODS.map((n, i) => [`MA${n}`, { color: MA_COLORS[i], fontSize: 10 }])
 )
 
-// 周期聚合：周K 每 5 个交易日；月K 按自然月
-function aggregate(period, kline, dates) {
-  if (period === '日K') return { kline, dates }
-  if (period === '周K') {
-    const outK = []
-    const outD = []
-    for (let i = 0; i < kline.length; i += 5) {
-      const group = kline.slice(i, i + 5)
-      const first = group[0]
-      const last = group[group.length - 1]
-      outK.push({
-        open: first.open,
-        close: last.close,
-        high: Math.max(...group.map((d) => d.high)),
-        low: Math.min(...group.map((d) => d.low)),
-        volume: +group.reduce((a, d) => a + d.volume, 0).toFixed(0),
-      })
-      outD.push(dates[Math.min(i + 4, dates.length - 1)])
-    }
-    return { kline: outK, dates: outD }
-  }
-  const outK = []
-  const outD = []
-  kline.forEach((d, i) => {
-    const m = dates[i].slice(0, 7)
-    const last = outK.length ? outK[outK.length - 1] : null
-    if (last && last.m === m) {
-      last.high = Math.max(last.high, d.high)
-      last.low = Math.min(last.low, d.low)
-      last.close = d.close
-      last.volume += d.volume
-      outD[outD.length - 1] = dates[i]
-    } else {
-      outK.push({ m, open: d.open, close: d.close, high: d.high, low: d.low, volume: d.volume })
-      outD.push(dates[i])
-    }
-  })
-  outK.forEach((k) => {
-    delete k.m
-    k.volume = +k.volume.toFixed(0)
-  })
-  return { kline: outK, dates: outD }
-}
-
 const series = computed(() => {
   const s = props.stock
   // 异步加载期间 stock 可能为 null
   if (!s || !Array.isArray(s.kline) || !Array.isArray(s.dates)) {
     return { kline: [], dates: [], values: [] }
   }
-  const { kline, dates } = aggregate(props.period, s.kline, s.dates)
+  const { kline, dates } = s.klinePeriod === props.period
+    ? { kline: s.kline, dates: s.dates }
+    : props.period === '日K'
+      ? { kline: s.kline, dates: s.dates }
+      : { kline: [], dates: [] }
   return {
     dates,
     kline,

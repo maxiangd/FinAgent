@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-默认地址：`http://localhost:5199`。开发服务器将 `/api` 请求代理到 `http://127.0.0.1:8000`，因此需要同时启动 `backend/` 下的 FastAPI 服务才能加载真实行情。
+默认地址：`http://localhost:5173`。开发服务器将 `/api` 请求代理到 `http://127.0.0.1:8000`，因此需要同时启动 `backend/` 下的 FastAPI 服务才能加载真实行情。
 
 ## 目录
 

@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     host: true,
-    port: 5199,
+    port: 5173,
     // 将前端 API 请求转发到本地 FastAPI 服务
     proxy: {
       '/api': {

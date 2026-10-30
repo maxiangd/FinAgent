@@ -8,6 +8,11 @@ __pycache__/
 .venv/
 venv/
 
+# 本地环境配置不提交，但保留示例文件
+.env
+.env.*
+!.env.example
+
 # Logs
 *.log
 
