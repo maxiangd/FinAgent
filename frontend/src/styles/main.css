@@ -1,0 +1,82 @@
+:root {
+  --bg: #0b0e14;
+  --panel: #141927;
+  --panel-2: #1a2133;
+  --border: #232c42;
+  --text: #e6ebf4;
+  --text-2: #9aa5bd;
+  --text-3: #636d87;
+  /* A 股约定：红涨绿跌 */
+  --up: #ef4444;
+  --up-bg: rgba(239, 68, 68, 0.12);
+  --down: #22c55e;
+  --down-bg: rgba(34, 197, 94, 0.12);
+  --accent: #4f7cff;
+  --accent-2: #7c5cff;
+  --gold: #d4a72c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3450;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* -------- 通用工具类 -------- */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.up {
+  color: var(--up) !important;
+}
+.down {
+  color: var(--down) !important;
+}
+.muted {
+  color: var(--text-2);
+}
+.faint {
+  color: var(--text-3);
+}
+
+/* Element Plus 暗色微调 */
+html.dark {
+  --el-bg-color: #141927;
+  --el-bg-color-overlay: #1a2133;
+  --el-border-color: #232c42;
+  --el-border-color-light: #232c42;
+  --el-border-color-lighter: #232c42;
+  --el-fill-color-blank: #141927;
+  --el-text-color-primary: #e6ebf4;
+  --el-text-color-regular: #c3cbe0;
+  --el-text-color-secondary: #9aa5bd;
+}

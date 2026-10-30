@@ -1,0 +1,17 @@
+# JavaScript / Vite
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Logs
+*.log
+
+# Editors and operating systems
+.DS_Store
+.vscode/
+.idea/

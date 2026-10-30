@@ -1,0 +1,5 @@
+# FinAgent Lab 数据服务（AKShare）
+fastapi>=0.110
+uvicorn[standard]>=0.29
+akshare>=1.14
+pandas>=2.0
