@@ -62,6 +62,39 @@
     </div>
 
     <!-- 2. 分析师研报 -->
+    <div v-else-if="stageKey === 'analyst' && data?.report" class="market-analysis-report">
+      <div class="market-report-head">
+        <el-tag :type="stanceTagType(data.report.stance)" effect="dark" size="small">
+          {{ stanceLabel(data.report.stance) }}
+        </el-tag>
+        <span class="faint">
+          {{ data.stock_name || data.stock_code }} · {{ periodName(data.period) }} ·
+          {{ data.actual_start_date }} 至 {{ data.actual_end_date }} · {{ data.model_name }}
+        </span>
+        <b class="market-report-confidence">置信度 {{ Math.round(data.report.confidence * 100) }}%</b>
+      </div>
+      <div class="market-report-conclusion">{{ data.report.conclusion }}</div>
+      <div v-for="(point, i) in data.report.key_points" :key="i" class="market-report-point">
+        <span class="market-report-point-index">{{ i + 1 }}</span>
+        <div class="market-report-point-body">
+          <div>{{ point.text }}</div>
+          <div class="market-report-citations">
+            <el-tag v-for="id in point.evidence_ids" :key="id" size="small" effect="plain" type="info">
+              {{ evidenceLabel(id) }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+      <div v-if="data.report.data_gaps?.length" class="market-report-gaps">
+        <b>数据缺口</b>
+        <span v-for="(gap, i) in data.report.data_gaps" :key="i">{{ gap }}</span>
+      </div>
+      <div v-if="data.limitations?.length" class="market-report-gaps">
+        <b>数据限制</b>
+        <span v-for="(limitation, i) in data.limitations" :key="i">{{ limitation }}</span>
+      </div>
+    </div>
+
     <div v-else-if="stageKey === 'analyst' && data" class="analyst-grid">
       <div v-for="a in data" :key="a.agent" class="panel analyst-card">
         <div class="analyst-head">
@@ -195,6 +228,15 @@ const props = defineProps({ stageKey: { type: String, required: true }, data: { 
 
 const periodName = (period) => ({ daily: '日K', weekly: '周K', monthly: '月K' })[period] || period
 const pct = (value) => value == null ? '暂无' : `${Number(value).toFixed(2)}%`
+const stanceLabel = (stance) => ({ bullish: '偏多', neutral: '中性', bearish: '偏空' })[stance] || '未知'
+const stanceTagType = (stance) => ({ bullish: 'danger', neutral: 'info', bearish: 'success' })[stance] || 'info'
+const evidenceById = computed(() => new Map((props.data?.evidence || []).map((item) => [item.evidence_id, item])))
+const evidenceLabel = (id) => {
+  const evidence = evidenceById.value.get(id)
+  if (!evidence) return `证据 ${id.slice(0, 8)}`
+  const date = evidence.observed_at ? ` · ${String(evidence.observed_at).slice(0, 10)}` : ''
+  return `${evidence.source}${date}`
+}
 const ingestionStatusLabel = (item) => {
   if (item.status === 'success') return '已获取'
   if (item.status === 'failed') return '获取失败'
@@ -322,6 +364,65 @@ const financialRows = computed(() => {
   line-height: 1.6;
 }
 .ingest-limitations .ingest-detail-title {
+  color: var(--text);
+}
+.market-analysis-report {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.market-report-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.market-report-confidence {
+  margin-left: auto;
+}
+.market-report-conclusion {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-weight: 600;
+  line-height: 1.7;
+}
+.market-report-point {
+  display: flex;
+  gap: 10px;
+  line-height: 1.7;
+}
+.market-report-point-index {
+  flex: 0 0 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--accent);
+  background: rgba(79, 124, 255, 0.12);
+}
+.market-report-point-body {
+  min-width: 0;
+}
+.market-report-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 5px;
+}
+.market-report-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: var(--gold);
+  background: var(--panel-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.market-report-gaps b {
   color: var(--text);
 }
 

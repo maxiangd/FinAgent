@@ -13,6 +13,7 @@ from schemas.analysis import (
     AnalystFinding,
     DebateTurn,
     EvidenceItem,
+    MarketAnalystReport,
     PMDecision,
     RiskReview,
     TradeProposal,
@@ -63,7 +64,7 @@ class AgentState(MessagesState, total=False):
     news_data: dict[str, Any]
     kline_data: dict[str, Any]
     evidence: list[EvidenceItem]
-    market_report: AnalystFinding
+    market_report: MarketAnalystReport
     fundamentals_report: AnalystFinding
     news_report: AnalystFinding
     investment_debate_state: InvestmentDebateState

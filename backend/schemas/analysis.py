@@ -77,6 +77,11 @@ class AnalysisTaskRequest(BaseModel):
         default=None,
         description="兼容单一基准日期的旧请求；不传区间时使用最新数据",
     )
+    provider: str | None = Field(
+        default=None,
+        max_length=32,
+        description="模型提供商 key（zhipu / deepseek / qwen）；不传时使用默认提供商",
+    )
 
     @model_validator(mode="after")
     def validate_analysis_dates(self):
@@ -184,6 +189,55 @@ class EvidenceItem(BaseModel):
     observed_at: datetime | date | None = None
     summary: str
     data: dict[str, Any] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class MarketAnalysisPoint(BaseModel):
+    """行情分析师提出的一条判断及其数据依据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=500)
+    evidence_ids: list[str] = Field(min_length=1, max_length=5)
+
+
+class MarketAnalystReport(BaseModel):
+    """市场分析师对用户所选 K 线区间的结构化分析。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stance: Literal["bullish", "neutral", "bearish"]
+    conclusion: str = Field(min_length=1, max_length=1000)
+    key_points: list[MarketAnalysisPoint] = Field(min_length=1, max_length=8)
+    confidence: float = Field(ge=0, le=1)
+    data_gaps: list[str] = Field(default_factory=list, max_length=12)
+
+
+class LLMProviderOption(BaseModel):
+    """前端可选的模型提供商；不包含任何密钥信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    model: str
+    is_default: bool = False
+
+
+class MarketAnalysisResponse(BaseModel):
+    """真实行情分析师节点的输出和可追溯证据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stock_code: str
+    stock_name: str | None = None
+    period: Literal["daily", "weekly", "monthly"]
+    actual_start_date: date
+    actual_end_date: date
+    provider: str
+    model_name: str
+    report: MarketAnalystReport
+    evidence: list[EvidenceItem] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
 

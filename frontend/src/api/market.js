@@ -47,6 +47,21 @@ export async function fetchDataIngestion(payload, { signal } = {}) {
   })
 }
 
+// 调用真实行情分析师；只分析请求对应的股票与日期范围。
+export async function fetchMarketAnalysis(payload, { signal } = {}) {
+  return request('/api/analysis/market', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+}
+
+// 已配置 API Key 的模型提供商；key 用于随分析请求提交
+export async function fetchLLMProviders() {
+  return request('/api/analysis/providers')
+}
+
 // 加载完整标的数据：快照 + K线，组装为前端 selected 结构
 export async function loadStock(code) {
   const [snap, kl] = await Promise.all([fetchSnapshot(code.trim()), fetchKline(code.trim())])

@@ -2,7 +2,7 @@
 
 import { reactive } from 'vue'
 import { STAGES } from './content'
-import { fetchDataIngestion } from '../../api/market'
+import { fetchDataIngestion, fetchMarketAnalysis } from '../../api/market'
 
 const now = () => {
   const d = new Date()
@@ -98,6 +98,21 @@ export async function startDataIngestion(request) {
       'ingest',
       '数据接入',
       klineItem?.note || '行情、基本面与新闻数据已返回。',
+      'success',
+    )
+
+    state.currentIndex = 1
+    pushEvent('analyst', '行情分析师', '正在调用模型分析所选区间…')
+    const analysis = await fetchMarketAnalysis(request, { signal: controller.signal })
+    if (guard()) return
+    state.completed.analyst = analysis
+    const stanceText = ({ bullish: '偏多', neutral: '中性', bearish: '偏空' })[
+      analysis.report?.stance
+    ] || '已生成报告'
+    pushEvent(
+      'analyst',
+      '行情分析师',
+      `${analysis.provider ? `${analysis.provider} · ` : ''}${analysis.model_name} 已完成分析：${stanceText}。`,
       'success',
     )
     state.finished = true

@@ -22,7 +22,7 @@
       </div>
       <div class="mode-badge">
         <el-tag effect="dark" type="success" size="small">AKShare 真实数据</el-tag>
-        <el-tag effect="plain" size="small" type="info">后端数据接入已连通 · LLM 待接入</el-tag>
+        <el-tag effect="plain" size="small" type="info">{{ providerTagText }}</el-tag>
       </div>
     </div>
 
@@ -149,14 +149,32 @@
               size="small"
               @change="onDateRangeChange"
             />
+            <el-select
+              v-model="provider"
+              class="provider-select"
+              size="small"
+              placeholder="选择分析模型"
+              :disabled="state.running || !providers.length"
+              :loading="providersLoading"
+            >
+              <el-option
+                v-for="p in providers"
+                :key="p.key"
+                :label="`${p.label} · ${p.model}`"
+                :value="p.key"
+              />
+            </el-select>
+            <el-tag v-if="providersLoaded && !providers.length" type="warning" effect="plain" size="small">
+              未配置模型 API
+            </el-tag>
             <el-button
               class="analysis-start-button"
               type="primary"
               :icon="VideoPlay"
-              :disabled="!selected || state.running"
+              :disabled="!selected || state.running || !providers.length"
               @click="start"
             >
-              开始接入
+              开始分析
             </el-button>
             <el-button
               :icon="VideoPause"
@@ -244,12 +262,12 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
 import { state, startDataIngestion, stopDataIngestion, selectStock, chartPrefs } from '../features/analysis/pipeline'
-import { fetchKline, loadStock, searchStock, showApiError } from '../api/market'
+import { fetchKline, loadStock, searchStock, showApiError, fetchLLMProviders } from '../api/market'
 import StageProgress from '../components/StageProgress.vue'
 import StageRender from '../components/StageRender.vue'
 import KLineChart from '../components/KLineChart.vue'
@@ -268,6 +286,16 @@ const periodOptions = ['日K', '周K', '月K']
 const apiPeriod = { 日K: 'daily', 周K: 'weekly', 月K: 'monthly' }
 const indicator = ref('macd')
 const kCount = ref(0)
+const providers = ref([])
+const providersLoading = ref(false)
+const providersLoaded = ref(false)
+const provider = ref('')
+const providerTagText = computed(() => {
+  if (!providersLoaded.value) return '模型配置加载中…'
+  if (!providers.value.length) return '模型 API 未配置'
+  const current = providers.value.find((p) => p.key === provider.value)
+  return current ? `行情分析师 · ${current.label}` : '行情分析师已接入'
+})
 const selected = computed(() => state.selected)
 const chartBars = ref(null)
 const chartLoading = ref(false)
@@ -558,6 +586,7 @@ function start() {
     request.start_date = range[0]
     request.end_date = range[1]
   }
+  if (provider.value) request.provider = provider.value
   startDataIngestion(request)
 }
 function stop() {
@@ -568,8 +597,27 @@ function reset() {
   if (state.selected) selectStock(state.selected)
 }
 
-// 默认加载贵州茅台（真实数据）
-loadByCode('600519')
+// 拉取已配置 API Key 的模型提供商，默认选中后端标记的默认项
+async function loadProviders() {
+  providersLoading.value = true
+  try {
+    const list = await fetchLLMProviders()
+    providers.value = list
+    const preferred = list.find((p) => p.is_default) || list[0]
+    provider.value = preferred?.key || ''
+  } catch {
+    providers.value = []
+  } finally {
+    providersLoading.value = false
+    providersLoaded.value = true
+  }
+}
+
+onMounted(() => {
+  loadProviders()
+  // 默认加载贵州茅台（真实数据）
+  loadByCode('600519')
+})
 </script>
 
 <style scoped>
@@ -731,6 +779,9 @@ loadByCode('600519')
   align-items: center;
   gap: 14px;
   margin-left: 8px;
+}
+.provider-select {
+  width: 230px;
 }
 .analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
   width: 370px;
