@@ -6,7 +6,7 @@ import math
 from datetime import date
 from typing import Any, Callable, Mapping
 
-from schemas.analysis import EvidenceItem
+from app.schemas.analysis_schemas import EvidenceItem
 
 
 MAX_TOOL_BARS = 120

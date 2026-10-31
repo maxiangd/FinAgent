@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from schemas.analysis import EvidenceItem
-from services import market as market_service
+from app.schemas.analysis_schemas import EvidenceItem
+from services.analysis.news_data_service import get_historical_news
 
 
 def extract_news(snapshot: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -33,7 +33,7 @@ def fetch_historical_news(
     end_date: date,
 ) -> dict[str, Any]:
     """按用户选择的日期范围读取个股新闻和巨潮公司公告。"""
-    return market_service.get_historical_news(code, start_date, end_date)
+    return get_historical_news(code, start_date, end_date)
 
 
 def build_news_evidence(

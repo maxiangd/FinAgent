@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from schemas.analysis import EvidenceItem
-from services import market as market_service
+from app.schemas.analysis_schemas import EvidenceItem
+from services.market.kline_data_service import get_kline
+from services.market.market_snapshot_service import get_snapshot
 
 
 EVIDENCE_BAR_LIMIT = 60
@@ -30,19 +31,19 @@ def fetch_kline_data(
 ) -> dict[str, Any]:
     """按分析周期和日期范围读取 K 线；区间任务额外读取指标预热数据。"""
     if start_date is not None and end_date is not None:
-        return market_service.get_kline(
+        return get_kline(
             code,
             period=period,
             start_date=start_date,
             end_date=end_date,
             warmup_bars=INDICATOR_WARMUP_BARS,
         )
-    return market_service.get_kline(code, period=period)
+    return get_kline(code, period=period)
 
 
 def fetch_current_snapshot(code: str) -> dict[str, Any]:
     """读取供当前时点分析使用的行情、基本面和近期新闻快照。"""
-    return market_service.get_snapshot(code)
+    return get_snapshot(code)
 
 
 def prepare_kline_context(

@@ -7,20 +7,26 @@ import logging
 import re
 from typing import Any, Mapping
 
-from agents.llm_client import (
+from agents.llm_provider_client import (
     LLMCallError,
     LLMSettings,
     load_llm_settings,
     request_chat_completion,
 )
-from agents.tools.market_tools import build_market_tools
-from schemas.analysis import AnalysisStage, EvidenceItem, MarketAnalystReport
+from agents.tools.market_analyst.market_data_tools import build_market_tools
+from app.schemas.analysis_schemas import AnalysisStage, EvidenceItem, MarketAnalystReport
 
 logger = logging.getLogger("finagent.analyst.market")
 
 
 MAX_TOOL_ROUNDS = 5
 MAX_TOOL_CALLS = 8
+MAX_JSON_REPAIRS = 2
+
+_JSON_REPAIR_PROMPT = (
+    "现在直接输出最终结论：只返回一个 JSON 对象，字段为 stance、conclusion、"
+    "key_points、confidence、data_gaps。不要输出解释、标题、列表、进度说明或后续计划。"
+)
 
 _SYSTEM_PROMPT = """你是 FinAgent 的行情分析师，只分析本次任务提供的股票 K 线和技术面。
 必须先调用 get_window_statistics 获取所选窗口的统计，再按需调用 get_kline_bars 查看区间内的 K 线细节。
@@ -28,7 +34,9 @@ _SYSTEM_PROMPT = """你是 FinAgent 的行情分析师，只分析本次任务�
 不要分析基本面、新闻、公司公告或宏观因素；不要编造未提供的指标、价位、原因或数据。
 区间涨幅、均线和回撤等数值应直接依据工具结果。每条 key_points 都必须引用工具返回的 evidence_ids。
 当区间数据不足以支持判断时，降低 confidence 并在 data_gaps 中说明。
-不要给出买入、卖出、仓位或目标价建议。最终只返回一个 JSON 对象，字段为：
+不要给出买入、卖出、仓位或目标价建议。
+调用工具拿到数据后，直接输出最终结果；不要输出分析过程、进度说明或"接下来我将…"这类文字。
+最终只返回一个 JSON 对象，字段为：
 stance (bullish/neutral/bearish), conclusion (string), key_points (array of {text, evidence_ids}),
 confidence (0 到 1), data_gaps (string array)。"""
 
@@ -127,7 +135,9 @@ def run_market_analyst(
 
     used_tools: set[str] = set()
     total_tool_calls = 0
-    for _ in range(MAX_TOOL_ROUNDS):
+    tool_rounds = 0
+    json_repairs = 0
+    while tool_rounds < MAX_TOOL_ROUNDS:
         # 统一用 auto：智谱等提供商只支持 auto，且 system prompt 已要求先调统计工具，
         # 下面还会校验 get_window_statistics 是否真的调用过，未调用则拒收报告
         choice = request_chat_completion(
@@ -140,7 +150,18 @@ def run_market_analyst(
         if not tool_calls:
             if "get_window_statistics" not in used_tools:
                 raise LLMCallError("模型未使用行情统计工具，未采纳其报告。")
-            report = _parse_report(choice.get("content"))
+            try:
+                report = _parse_report(choice.get("content"))
+            except LLMCallError:
+                # 小模型常在工具调用后先输出一段分析文字或后续计划，
+                # 此时追加一轮，明确要求只返回 JSON；仍不合格才判定失败
+                if json_repairs >= MAX_JSON_REPAIRS:
+                    raise
+                json_repairs += 1
+                logger.warning("模型未返回 JSON，追加一次格式纠正（第 %s 次）", json_repairs)
+                messages.append({"role": "assistant", "content": choice.get("content") or ""})
+                messages.append({"role": "user", "content": _JSON_REPAIR_PROMPT})
+                continue
             invalid_ids = {
                 evidence_id
                 for point in report.key_points
@@ -153,6 +174,7 @@ def run_market_analyst(
             cited_evidence = [item for item in all_evidence if item.evidence_id in cited_ids]
             return report, settings.model_name, cited_evidence
 
+        tool_rounds += 1
         total_tool_calls += len(tool_calls)
         if total_tool_calls > MAX_TOOL_CALLS:
             raise LLMCallError("模型工具调用次数超过限制，分析已停止。")

@@ -7,7 +7,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import MessagesState
 
-from schemas.analysis import (
+from app.schemas.analysis_schemas import (
     AnalysisError,
     AnalysisStage,
     AnalystFinding,

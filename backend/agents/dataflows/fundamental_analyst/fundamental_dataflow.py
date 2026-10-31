@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Mapping
 
-from schemas.analysis import EvidenceItem
-from services import market as market_service
+from app.schemas.analysis_schemas import EvidenceItem
+from services.analysis.fundamental_data_service import get_historical_fundamentals
 
 
 _FUNDAMENTAL_FIELDS = (
@@ -35,7 +35,7 @@ def fetch_historical_fundamentals(
     end_date: date,
 ) -> dict[str, Any]:
     """获取按报告披露日整理的区间基本面数据。"""
-    return market_service.get_historical_fundamentals(code, start_date, end_date)
+    return get_historical_fundamentals(code, start_date, end_date)
 
 
 def build_fundamental_evidence(

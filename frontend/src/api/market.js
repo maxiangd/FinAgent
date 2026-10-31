@@ -1,20 +1,5 @@
-// 后端数据 API 封装（vite dev 代理 /api -> http://127.0.0.1:8000）
-import { ElMessage } from 'element-plus'
-
-async function request(path, options = {}) {
-  const res = await fetch(path, options)
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`
-    try {
-      const body = await res.json()
-      detail = body.detail || detail
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail)
-  }
-  return res.json()
-}
+// 行情接口：快照、K 线、搜索
+import { request } from './http'
 
 // 行情快照（名称/最新价/涨跌幅/财务/原始新闻），字段兼容前端 selected
 export async function fetchSnapshot(code) {
@@ -37,37 +22,8 @@ export async function searchStock(q) {
   return request(`/api/search?q=${encodeURIComponent(q)}`)
 }
 
-// 执行一次真实的数据接入预览，日期范围由页面当前选择传入。
-export async function fetchDataIngestion(payload, { signal } = {}) {
-  return request('/api/analysis/ingest', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  })
-}
-
-// 调用真实行情分析师；只分析请求对应的股票与日期范围。
-export async function fetchMarketAnalysis(payload, { signal } = {}) {
-  return request('/api/analysis/market', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal,
-  })
-}
-
-// 已配置 API Key 的模型提供商；key 用于随分析请求提交
-export async function fetchLLMProviders() {
-  return request('/api/analysis/providers')
-}
-
 // 加载完整标的数据：快照 + K线，组装为前端 selected 结构
 export async function loadStock(code) {
   const [snap, kl] = await Promise.all([fetchSnapshot(code.trim()), fetchKline(code.trim())])
   return { ...snap, kline: kl.items, dates: kl.dates }
-}
-
-export function showApiError(e) {
-  ElMessage.error(`数据获取失败：${e.message || e}`)
 }

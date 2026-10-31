@@ -2,7 +2,7 @@
 
 import { reactive } from 'vue'
 import { STAGES } from './content'
-import { fetchDataIngestion, fetchMarketAnalysis } from '../../api/market'
+import { fetchDataIngestion, fetchMarketAnalysis } from '../../api/analysis'
 
 const now = () => {
   const d = new Date()

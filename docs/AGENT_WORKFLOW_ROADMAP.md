@@ -140,4 +140,4 @@ flowchart LR
 
 ## 下一步
 
-行情、基本面和新闻数据流由 `backend/agents/context_builder.py` 按周期和起止日期统一编排，前端“开始接入”已通过 `POST /api/analysis/ingest` 展示真实接入结果。历史基本面按财报公告日期对齐，新闻和公司公告按发布时间筛选，并注明覆盖范围与数据限制。下一步实现任务范围受控的 Agent 工具和真实市场分析节点，再逐步连接其余分析阶段。
+行情、基本面和新闻数据流由 `backend/agents/analysis_context_builder.py` 按周期和起止日期统一编排，前端“开始接入”已通过 `POST /api/analysis/ingest` 展示真实接入结果。历史基本面按财报公告日期对齐，新闻和公司公告按发布时间筛选，并注明覆盖范围与数据限制。下一步实现任务范围受控的 Agent 工具和真实市场分析节点，再逐步连接其余分析阶段。

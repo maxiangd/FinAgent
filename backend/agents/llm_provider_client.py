@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+from config.settings import get_env_str
 
 
 class LLMConfigurationError(RuntimeError):
@@ -62,16 +57,12 @@ class LLMSettings:
     timeout_seconds: int
 
 
-def _env(name: str) -> str:
-    return os.getenv(name, "").strip()
-
-
-def _provider_env(key: str, field: str) -> str:
-    return _env(f"LLM_{key.upper()}_{field}")
+def _providerget_env_str(key: str, field: str) -> str:
+    return get_env_str(f"LLM_{key.upper()}_{field}")
 
 
 def _timeout_seconds() -> int:
-    raw = _env("LLM_TIMEOUT_SECONDS") or "90"
+    raw = get_env_str("LLM_TIMEOUT_SECONDS") or "90"
     try:
         timeout = int(raw)
     except ValueError as exc:
@@ -85,13 +76,13 @@ def available_providers() -> list[dict]:
     """返回已配置 API Key 的提供商（不含密钥），供前端选择。"""
     providers = []
     for spec in PROVIDER_SPECS:
-        if not _provider_env(spec.key, "API_KEY"):
+        if not _providerget_env_str(spec.key, "API_KEY"):
             continue
         providers.append(
             {
                 "key": spec.key,
                 "label": spec.label,
-                "model": _provider_env(spec.key, "MODEL") or spec.model_name,
+                "model": _providerget_env_str(spec.key, "MODEL") or spec.model_name,
             }
         )
     return providers
@@ -102,7 +93,7 @@ def default_provider_key() -> str | None:
     configured = [item["key"] for item in available_providers()]
     if not configured:
         return None
-    preferred = _env("LLM_DEFAULT_PROVIDER").lower()
+    preferred = get_env_str("LLM_DEFAULT_PROVIDER").lower()
     return preferred if preferred in configured else configured[0]
 
 
@@ -118,7 +109,7 @@ def load_llm_settings(provider: str | None = None) -> LLMSettings:
             "尚未配置模型服务。请在后端 .env 中至少填写一个提供商的 API Key，"
             "例如 LLM_ZHIPU_API_KEY（智谱，免费）。"
         )
-    api_key = _provider_env(key, "API_KEY")
+    api_key = _providerget_env_str(key, "API_KEY")
     if not api_key:
         raise LLMConfigurationError(
             f"未配置 {specs[key].label} 的 API Key，请在 .env 中填写 LLM_{key.upper()}_API_KEY。"
@@ -126,9 +117,9 @@ def load_llm_settings(provider: str | None = None) -> LLMSettings:
     return LLMSettings(
         provider=key,
         label=specs[key].label,
-        base_url=(_provider_env(key, "BASE_URL") or specs[key].base_url).rstrip("/"),
+        base_url=(_providerget_env_str(key, "BASE_URL") or specs[key].base_url).rstrip("/"),
         api_key=api_key,
-        model_name=_provider_env(key, "MODEL") or specs[key].model_name,
+        model_name=_providerget_env_str(key, "MODEL") or specs[key].model_name,
         timeout_seconds=_timeout_seconds(),
     )
 
@@ -138,7 +129,7 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 def _retry_attempts() -> int:
     try:
-        attempts = int(_env("LLM_MAX_ATTEMPTS") or "3")
+        attempts = int(get_env_str("LLM_MAX_ATTEMPTS") or "3")
     except ValueError:
         return 3
     return min(max(attempts, 1), 5)

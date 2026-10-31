@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from agents.dataflows import fundamentals_data, market_data, news_data
-from schemas.analysis import AnalysisTaskRequest, EvidenceItem
+from agents.dataflows.fundamental_analyst import fundamental_dataflow
+from agents.dataflows.market_analyst import market_dataflow
+from agents.dataflows.news_sentiment_analyst import news_dataflow
+from app.schemas.analysis_schemas import AnalysisTaskRequest, EvidenceItem
 
 if TYPE_CHECKING:
-    from agents.state import AgentState
+    from agents.agent_state import AgentState
 
 
 def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
@@ -19,7 +21,7 @@ def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
     is_range_request = request.start_date is not None
     is_point_in_time_request = request.analysis_date is not None
 
-    raw_kline = market_data.fetch_kline_data(
+    raw_kline = market_dataflow.fetch_kline_data(
         code=code,
         period=period,
         start_date=request.start_date,
@@ -27,7 +29,7 @@ def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
     )
     requested_end_date = request.end_date or request.analysis_date
     kline_data, kline_evidence, actual_start_date, actual_end_date = (
-        market_data.prepare_kline_context(
+        market_dataflow.prepare_kline_context(
             raw_kline=raw_kline,
             code=code,
             period=period,
@@ -46,22 +48,22 @@ def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
         # 历史任务按公开日期获取财务和新闻；实时估值快照不用于解释过去。
         data_start_date = request.start_date or request.analysis_date
         data_end_date = request.end_date or request.analysis_date
-        fundamentals = fundamentals_data.fetch_historical_fundamentals(
+        fundamentals = fundamental_dataflow.fetch_historical_fundamentals(
             code=code,
             start_date=data_start_date,
             end_date=data_end_date,
         )
-        news = news_data.fetch_historical_news(
+        news = news_dataflow.fetch_historical_news(
             code=code,
             start_date=data_start_date,
             end_date=data_end_date,
         )
         observed_at = datetime.now(timezone.utc)
-        fundamental_evidence = fundamentals_data.build_historical_fundamental_evidence(
+        fundamental_evidence = fundamental_dataflow.build_historical_fundamental_evidence(
             fundamentals=fundamentals,
             observed_at=observed_at,
         )
-        news_evidence = news_data.build_news_evidence(news, observed_at)
+        news_evidence = news_dataflow.build_news_evidence(news, observed_at)
         evidence.extend(
             item
             for item in (fundamental_evidence, news_evidence)
@@ -69,26 +71,26 @@ def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
         )
     else:
         # 未指定历史日期时，使用当前行情、基本面和近期新闻快照。
-        snapshot = market_data.fetch_current_snapshot(code)
+        snapshot = market_dataflow.fetch_current_snapshot(code)
         observed_at = datetime.now(timezone.utc)
         snapshot_meta = snapshot.get("meta") or {}
         source_note = snapshot_meta.get("note")
 
-        market_snapshot = market_data.extract_market_snapshot(snapshot)
-        fundamentals = fundamentals_data.extract_fundamentals(snapshot)
-        news = news_data.build_current_news_data(news_data.extract_news(snapshot))
+        market_snapshot = market_dataflow.extract_market_snapshot(snapshot)
+        fundamentals = fundamental_dataflow.extract_fundamentals(snapshot)
+        news = news_dataflow.build_current_news_data(news_dataflow.extract_news(snapshot))
 
-        market_evidence = market_data.build_market_snapshot_evidence(
+        market_evidence = market_dataflow.build_market_snapshot_evidence(
             market_data=market_snapshot,
             observed_at=observed_at,
             source_note=source_note,
         )
-        fundamental_evidence = fundamentals_data.build_fundamental_evidence(
+        fundamental_evidence = fundamental_dataflow.build_fundamental_evidence(
             fundamentals=fundamentals,
             observed_at=observed_at,
             source_note=source_note,
         )
-        news_evidence = news_data.build_news_evidence(news, observed_at)
+        news_evidence = news_dataflow.build_news_evidence(news, observed_at)
 
         evidence.extend(
             item
@@ -115,8 +117,8 @@ def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
 
 def build_initial_agent_state(request: AnalysisTaskRequest, task_id: str) -> AgentState:
     """将数据接入上下文包装成 LangGraph 的共享状态。"""
-    from agents.state import AgentState
-    from schemas.analysis import AnalysisStage
+    from agents.agent_state import AgentState
+    from app.schemas.analysis_schemas import AnalysisStage
 
     context = build_initial_context(request)
     return AgentState(

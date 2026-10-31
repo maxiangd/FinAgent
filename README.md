@@ -8,15 +8,39 @@ A 股行情与多阶段投研流程演示项目。前端使用 Vue 3 + Vite，�
 FinancialAgent/
 ├─ requirements.txt                 # 后端 Python 依赖
 ├─ backend/
-│  ├─ main.py                       # FastAPI 应用与 HTTP 接口
-│  ├─ routers/                       # 健康检查与行情 API 路由
-│  ├─ services/market.py            # 行情数据获取、缓存与整理
+│  ├─ main.py                       # FastAPI 入口（uvicorn main:app）
+│  ├─ config/settings.py            # 统一读取 .env 与环境变量
+│  ├─ app/                          # Web/API 层
+│  │  ├─ routers/                   # analysis_router / market_router / health_router
+│  │  ├─ schemas/                   # 请求与响应模型（analysis_schemas.py）
+│  │  └─ presenters/                # 把 Agent 状态整理成接口响应
+│  ├─ agents/                       # 智能体层
+│  │  ├─ agent_state.py             # LangGraph 共享状态 AgentState
+│  │  ├─ analysis_context_builder.py# 按周期和日期组装分析上下文
+│  │  ├─ llm_provider_client.py     # 多提供商大模型客户端
+│  │  ├─ analysts/                  # 分析师节点（market_analyst_agent …）
+│  │  ├─ tools/                     # 模型可调用的受限工具，按分析师分子目录
+│  │  │  └─ market_analyst/         # 行情分析师的 K 线统计与明细
+│  │  └─ dataflows/                 # 数据流适配层，按主要服务的分析师分子目录
+│  │     ├─ market_analyst/         # 行情与 K 线
+│  │     ├─ fundamental_analyst/    # 财报与估值
+│  │     └─ news_sentiment_analyst/ # 新闻与公告
+│  └─ services/                     # 外部数据源（AKShare / 雪球 / 腾讯 / 巨潮）
+│     ├─ market/                    # 行情类：图表展示与智能体分析共用
+│     │  ├─ kline_data_service.py   # 日/周/月 K 线
+│     │  ├─ market_snapshot_service.py # 行情快照（价格/市值/财务/行业）
+│     │  └─ stock_name_service.py   # 代码表与搜索
+│     ├─ analysis/                  # 分析类：供智能体构建证据
+│     │  ├─ fundamental_data_service.py # 财务指标与历史基本面
+│     │  └─ news_data_service.py    # 新闻与公司公告
+│     └─ common/
+│        └─ cache_manager.py        # 进程内缓存、重试与字段整理
 └─ frontend/
    ├─ src/
-   │  ├─ api/market.js              # 前端行情 API 客户端
+   │  ├─ api/                       # http / market / analysis 三个客户端
    │  ├─ components/                # 页面组件
    │  ├─ features/
-   │  │  ├─ analysis/               # 分析流程、状态和展示内容生成
+   │  │  ├─ analysis/               # 分析流程与阶段定义
    │  │  └─ market/                 # 行情图表计算逻辑
    │  ├─ router/                    # 页面路由
    │  ├─ styles/                    # 全局样式
@@ -63,6 +87,19 @@ Vite 默认运行在 `http://localhost:5173`，并将 `/api` 请求转发给 `12
 
 免费模型在高峰期限流比较常见，后端对 429/5xx 会按 3s、6s 自动退避重试，次数由 `LLM_MAX_ATTEMPTS`（默认 3）控制；重试后仍失败会在页面上提示换用其他提供商。
 
+## 缓存
+
+`.env` 的 `CACHE_BACKEND` 决定缓存后端，改完重启生效：
+
+| 取值 | 说明 |
+| --- | --- |
+| `memory`（默认） | 进程内缓存，单进程开发够用，不需要外部服务 |
+| `redis` | 跨进程、重启后仍保留；多 worker 部署时使用。连接串写在 `REDIS_URL`，格式 `redis://:密码@127.0.0.1:6379/0` |
+
+Redis 连不上时会自动回退到进程内缓存，并在日志里打一条 WARNING；日志中的连接串会隐藏密码。
+
+K 线按 `(股票代码, 周期)` 缓存一份完整序列（根数由 `KLINE_*_LIMIT` 决定），图表加载与后续分析共用同一次取数，指定日期区间的请求直接从这份序列本地切片并补齐预热；请求更早的历史区间时才会重新回源。
+
 ## 当前边界
 
 - 行情搜索、快照和日 K 线由 FastAPI 后端通过 AKShare 获取；周/月 K 线取自雪球接口（东财行情接口在部分网络下不可达），腾讯接口作为兜底。
@@ -73,7 +110,7 @@ Vite 默认运行在 `http://localhost:5173`，并将 `/api` 请求转发给 `12
 
 - 按业务领域归类代码：行情相关逻辑放在 `features/market`，分析流程放在 `features/analysis`。
 - Vue 响应式状态和纯计算逻辑使用模块与函数组织；只在需要封装独立状态和行为时引入类。
-- 后端数据获取保持在 `services`，HTTP 路由和应用入口放在 `main.py`。
+- 后端分层：`app/` 放 HTTP 路由、请求模型和响应组装，`agents/` 放智能体与数据流，`services/` 放外部数据源访问，配置统一从 `config/settings.py` 读取。
 
 ## 开发路线
 

@@ -9,9 +9,9 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers.analysis import router as analysis_router
-from routers.health import router as health_router
-from routers.market import router as market_router
+from app.routers.analysis_router import router as analysis_router
+from app.routers.health_router import router as health_router
+from app.routers.market_router import router as market_router
 
 logging.basicConfig(level=logging.INFO)
 
