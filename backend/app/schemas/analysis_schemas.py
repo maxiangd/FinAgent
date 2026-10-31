@@ -325,3 +325,31 @@ class AnalysisReport(BaseModel):
     error: AnalysisError | None = None
     created_at: datetime = Field(default_factory=_utc_now)
     completed_at: datetime | None = None
+
+
+class AnalysisRunResponse(BaseModel):
+    """LangGraph 工作流一次运行的最终状态摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    stock_code: str
+    stock_name: str | None = None
+    period: Literal["daily", "weekly", "monthly"]
+    actual_start_date: date
+    actual_end_date: date
+    current_stage: AnalysisStage
+    sender: str | None = None
+    provider: str | None = None
+    ingestion: DataIngestionResponse | None = None
+    market_report: MarketAnalystReport
+    fundamental_report: AnalystFinding | None = None
+    news_report: AnalystFinding | None = None
+    debate_turns: list[DebateTurn] = Field(default_factory=list)
+    trade_proposal: TradeProposal | None = None
+    risk_reviews: list[RiskReview] = Field(default_factory=list)
+    pm_decision: PMDecision | None = None
+    model_names: dict[str, str] = Field(default_factory=dict)
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    errors: list[AnalysisError] = Field(default_factory=list)

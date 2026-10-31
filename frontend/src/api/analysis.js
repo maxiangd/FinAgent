@@ -21,6 +21,17 @@ export async function fetchMarketAnalysis(payload, { signal } = {}) {
   })
 }
 
+// 执行完整工作流：数据接入 → 三个分析师 → 辩论 → 提案 → 风控 → PM
+export async function fetchFullAnalysis(payload, { signal } = {}) {
+  return request('/api/analysis/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+    timeoutMs: 600_000,
+  })
+}
+
 // 已配置 API Key 的模型提供商；key 用于随分析请求提交
 export async function fetchLLMProviders() {
   return request('/api/analysis/providers')

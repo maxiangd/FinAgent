@@ -59,12 +59,18 @@ class AgentState(MessagesState, total=False):
     actual_end_date: date | None
     sender: str
     current_stage: AnalysisStage
+    provider: str | None
     market_snapshot: dict[str, Any]
     fundamentals_data: dict[str, Any]
     news_data: dict[str, Any]
     kline_data: dict[str, Any]
     evidence: list[EvidenceItem]
     market_report: MarketAnalystReport
+    market_report_evidence: list[EvidenceItem]
+    market_model_name: str
+    market_provider: str
+    fundamental_model_name: str
+    news_model_name: str
     fundamentals_report: AnalystFinding
     news_report: AnalystFinding
     investment_debate_state: InvestmentDebateState

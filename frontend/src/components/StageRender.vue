@@ -93,6 +93,79 @@
         <b>数据限制</b>
         <span v-for="(limitation, i) in data.limitations" :key="i">{{ limitation }}</span>
       </div>
+
+      <div v-if="extraFindings.length" class="analyst-extra">
+        <div v-for="finding in extraFindings" :key="finding.title" class="analyst-extra-card">
+          <div class="analyst-extra-head">
+            <b>{{ finding.title }}</b>
+            <el-tag :type="stanceTagType(finding.report.stance)" effect="plain" size="small">
+              {{ stanceLabel(finding.report.stance) }}
+            </el-tag>
+            <span class="faint">置信度 {{ Math.round((finding.report.confidence || 0) * 100) }}%</span>
+          </div>
+          <div class="analyst-extra-conclusion">{{ finding.report.conclusion }}</div>
+          <ul class="analyst-extra-points">
+            <li v-for="(point, i) in finding.report.key_points" :key="i">{{ point }}</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 多空辩论 -->
+    <div v-else-if="stageKey === 'debate' && data?.length" class="debate-wrap">
+      <div v-for="(turn, i) in data" :key="i" class="debate-turn" :class="turn.speaker">
+        <div class="debate-badge">{{ turn.speaker === 'bull' ? '多头' : '空头' }}</div>
+        <div class="debate-body">
+          <div class="faint">第 {{ turn.round_number }} 轮</div>
+          <div>{{ turn.argument }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. 交易提案 -->
+    <div v-else-if="stageKey === 'trader' && data" class="proposal-wrap">
+      <div class="proposal-head">
+        <el-tag effect="dark" size="small" :type="actionTagType(data.action)">{{ actionLabel(data.action) }}</el-tag>
+        <span class="faint">研究性提案，不构成下单指令</span>
+      </div>
+      <div class="proposal-rationale">{{ data.rationale }}</div>
+      <div class="proposal-prices">
+        <span>参考价 {{ priceLabel(data.entry_price) }}</span>
+        <span>目标价 {{ priceLabel(data.target_price) }}</span>
+        <span>止损价 {{ priceLabel(data.stop_price) }}</span>
+      </div>
+    </div>
+
+    <!-- 5. 风控评审 -->
+    <div v-else-if="stageKey === 'risk' && data?.length" class="risk-wrap">
+      <div v-for="review in data" :key="review.reviewer" class="risk-card">
+        <div class="risk-head">
+          <b>{{ reviewerLabel(review.reviewer) }}</b>
+          <el-tag size="small" effect="plain" :type="decisionTagType(review.decision)">
+            {{ decisionLabel(review.decision) }}
+          </el-tag>
+        </div>
+        <div class="risk-summary">{{ review.summary }}</div>
+        <ul v-if="review.concerns?.length" class="risk-list">
+          <li v-for="(concern, i) in review.concerns" :key="i">{{ concern }}</li>
+        </ul>
+        <div v-if="review.required_controls?.length" class="risk-controls faint">
+          控制要求：{{ review.required_controls.join('；') }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. PM 决策 -->
+    <div v-else-if="stageKey === 'pm' && data" class="pm-wrap">
+      <div class="pm-head">
+        <el-tag effect="dark" size="small" :type="actionTagType(data.action)">{{ actionLabel(data.action) }}</el-tag>
+        <b>置信度 {{ Math.round((data.confidence || 0) * 100) }}%</b>
+      </div>
+      <div class="pm-rationale">{{ data.rationale }}</div>
+      <div v-if="data.key_risks?.length" class="pm-risks">
+        <b>主要风险</b>
+        <span v-for="(risk, i) in data.key_risks" :key="i">{{ risk }}</span>
+      </div>
     </div>
 
   </div>
@@ -107,6 +180,25 @@ const periodName = (period) => ({ daily: '日K', weekly: '周K', monthly: '月K'
 const pct = (value) => value == null ? '暂无' : `${Number(value).toFixed(2)}%`
 const stanceLabel = (stance) => ({ bullish: '偏多', neutral: '中性', bearish: '偏空' })[stance] || '未知'
 const stanceTagType = (stance) => ({ bullish: 'danger', neutral: 'info', bearish: 'success' })[stance] || 'info'
+const actionLabel = (action) => ({ buy: '买入', hold: '持有', reduce: '减仓', avoid: '回避' })[action] || action
+const actionTagType = (action) => ({ buy: 'danger', hold: 'info', reduce: 'warning', avoid: 'success' })[action] || 'info'
+const priceLabel = (value) => (value == null ? '未给出' : `${Number(value).toFixed(2)} 元`)
+const reviewerLabel = (reviewer) =>
+  ({ aggressive: '进攻型风控', neutral: '中性风控', conservative: '保守型风控' })[reviewer] || reviewer
+const decisionLabel = (decision) => ({ approve: '通过', revise: '需修改', reject: '否决' })[decision] || decision
+const decisionTagType = (decision) =>
+  ({ approve: 'success', revise: 'warning', reject: 'danger' })[decision] || 'info'
+
+const extraFindings = computed(() => {
+  const items = []
+  if (props.data?.fundamental_report) {
+    items.push({ title: '基本面分析师', report: props.data.fundamental_report })
+  }
+  if (props.data?.news_report) {
+    items.push({ title: '新闻情绪分析师', report: props.data.news_report })
+  }
+  return items
+})
 const evidenceById = computed(() => new Map((props.data?.evidence || []).map((item) => [item.evidence_id, item])))
 const evidenceLabel = (id) => {
   const evidence = evidenceById.value.get(id)
@@ -301,6 +393,157 @@ const financialRows = computed(() => {
 }
 .market-report-gaps b {
   color: var(--text);
+}
+
+/* 三个分析师的补充结论 */
+.analyst-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.analyst-extra-card {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.analyst-extra-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.analyst-extra-conclusion {
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.analyst-extra-points {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+/* 多空辩论 */
+.debate-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.debate-turn {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid transparent;
+}
+.debate-turn.bull {
+  border-left-color: var(--up);
+}
+.debate-turn.bear {
+  border-left-color: var(--down);
+}
+.debate-badge {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+.debate-turn.bull .debate-badge {
+  color: var(--up);
+}
+.debate-turn.bear .debate-badge {
+  color: var(--down);
+}
+.debate-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.7;
+}
+
+/* 交易提案 */
+.proposal-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.proposal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.proposal-rationale {
+  line-height: 1.8;
+  color: var(--text-2);
+}
+.proposal-prices {
+  display: flex;
+  gap: 18px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* 风控评审 */
+.risk-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.risk-card {
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.risk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.risk-summary {
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.risk-list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-2);
+}
+.risk-controls {
+  font-size: 12px;
+}
+
+/* PM 决策 */
+.pm-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pm-rationale {
+  line-height: 1.8;
+  color: var(--text-2);
+}
+.pm-risks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #f0b9b9;
 }
 
 </style>

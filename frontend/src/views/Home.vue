@@ -245,7 +245,7 @@
             </div>
             <div class="running-placeholder faint">
               <el-icon class="is-loading" :size="20" style="margin-right: 8px"><Loading /></el-icon>
-              {{ s.label }} 阶段 Agent 正在执行，事件实时推送至右侧事件流…
+              {{ s.label }} 正在执行，请稍候（完整链路约 1-2 分钟）…
             </div>
           </div>
         </template>

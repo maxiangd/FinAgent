@@ -1,4 +1,4 @@
-"""分析任务的数据接入预览接口。"""
+"""分析任务的数据接入与分析工作流接口。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from agents.analysts.market_analyst_agent import run_market_analyst
 from agents.analysis_context_builder import build_initial_context
 from agents.llm_provider_client import (
     LLMCallError,
@@ -17,8 +16,11 @@ from agents.llm_provider_client import (
     default_provider_key,
     load_llm_settings,
 )
+from agents.workflow import get_analysis_workflow, initial_workflow_state
 from app.presenters.analysis_response_builder import build_ingestion_response
 from app.schemas.analysis_schemas import (
+    AnalysisRunResponse,
+    AnalysisStage,
     AnalysisTaskRequest,
     DataIngestionResponse,
     LLMProviderOption,
@@ -27,6 +29,43 @@ from app.schemas.analysis_schemas import (
 
 logger = logging.getLogger("finagent.analysis.routes")
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+
+
+def _run_workflow(
+    request: AnalysisTaskRequest,
+    analysts: tuple[str, ...],
+    include_decision: bool,
+) -> dict:
+    """同步执行一次工作流（由 asyncio.to_thread 调用）。"""
+    # 先校验提供商配置，避免把配置错误带进图里再暴露成通用异常
+    load_llm_settings(request.provider)
+    return get_analysis_workflow(analysts, include_decision).invoke(
+        initial_workflow_state(request)
+    )
+
+
+async def _execute_workflow(
+    request: AnalysisTaskRequest,
+    analysts: tuple[str, ...] = ("market", "fundamental", "news"),
+    include_decision: bool = True,
+) -> dict:
+    """执行工作流并把各类失败映射成对应的 HTTP 状态码。"""
+    try:
+        return await asyncio.to_thread(_run_workflow, request, analysts, include_decision)
+    except UnknownProviderError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except LLMConfigurationError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except LLMCallError as e:
+        logger.warning("%s 分析工作流失败：%s", request.stock_code, e)
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        logger.exception("%s 分析工作流执行失败", request.stock_code)
+        raise HTTPException(status_code=502, detail="分析执行失败，请查看后端日志。") from e
 
 
 @router.post("/ingest", response_model=DataIngestionResponse)
@@ -59,44 +98,69 @@ async def list_llm_providers():
 
 @router.post("/market", response_model=MarketAnalysisResponse)
 async def analyze_market(request: AnalysisTaskRequest):
-    """按所选周期和区间取数，并运行一次真实行情分析师。"""
-    try:
-        settings = load_llm_settings(request.provider)
-        context = await asyncio.to_thread(build_initial_context, request)
-        report, model_name, evidence = await asyncio.to_thread(
-            run_market_analyst,
-            context,
-            settings,
-        )
-        limitations = list(dict.fromkeys(
+    """只运行行情分析师节点，返回该阶段的结论（前端当前调用路径）。"""
+    state = await _execute_workflow(request, analysts=("market",), include_decision=False)
+    evidence = list(state.get("market_report_evidence") or [])
+    kline = state.get("kline_data") or {}
+    return MarketAnalysisResponse(
+        stock_code=request.stock_code,
+        stock_name=kline.get("name"),
+        period=request.period,
+        actual_start_date=state["actual_start_date"],
+        actual_end_date=state["actual_end_date"],
+        provider=state.get("market_provider") or request.provider or "",
+        model_name=state.get("market_model_name") or "",
+        report=state["market_report"],
+        evidence=evidence,
+        limitations=list(dict.fromkeys(
             limitation
             for item in evidence
             for limitation in item.limitations
-        ))
-        kline = context.get("kline_data") or {}
-        return MarketAnalysisResponse(
-            stock_code=request.stock_code,
-            stock_name=kline.get("name"),
-            period=request.period,
-            actual_start_date=context["actual_start_date"],
-            actual_end_date=context["actual_end_date"],
-            provider=settings.provider,
-            model_name=model_name,
-            report=report,
-            evidence=evidence,
-            limitations=limitations,
-        )
-    except UnknownProviderError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except LLMConfigurationError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except LLMCallError as e:
-        logger.warning("%s 行情分析师调用失败：%s", request.stock_code, e)
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:  # noqa: BLE001
-        logger.exception("%s 行情分析师执行失败", request.stock_code)
-        raise HTTPException(status_code=502, detail="行情分析师执行失败，请查看后端日志。") from e
+        )),
+    )
+
+
+@router.post("/run", response_model=AnalysisRunResponse)
+async def run_analysis(request: AnalysisTaskRequest):
+    """执行完整分析工作流，返回各阶段结论与最终状态摘要。"""
+    state = await _execute_workflow(request)
+    evidence = list(state.get("evidence") or [])
+    kline = state.get("kline_data") or {}
+    debate_state = state.get("investment_debate_state") or {}
+    risk_state = state.get("risk_debate_state") or {}
+    model_names = {
+        key: value
+        for key, value in {
+            "market": state.get("market_model_name"),
+            "fundamental": state.get("fundamental_model_name"),
+            "news": state.get("news_model_name"),
+        }.items()
+        if value
+    }
+    return AnalysisRunResponse(
+        task_id=state.get("task_id") or "",
+        stock_code=request.stock_code,
+        stock_name=kline.get("name"),
+        period=request.period,
+        actual_start_date=state["actual_start_date"],
+        actual_end_date=state["actual_end_date"],
+        current_stage=state.get("current_stage") or AnalysisStage.PM,
+        sender=state.get("sender"),
+        provider=state.get("market_provider"),
+        ingestion=build_ingestion_response(request, state),
+        market_report=state["market_report"],
+        fundamental_report=state.get("fundamentals_report"),
+        news_report=state.get("news_report"),
+        debate_turns=list(debate_state.get("history") or []),
+        trade_proposal=state.get("trade_proposal"),
+        risk_reviews=list(risk_state.get("history") or []),
+        pm_decision=state.get("pm_decision"),
+        model_names=model_names,
+        evidence=evidence,
+        limitations=list(dict.fromkeys(
+            limitation
+            for item in evidence
+            for limitation in item.limitations
+        )),
+        errors=list(state.get("errors") or []),
+    )

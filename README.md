@@ -17,10 +17,18 @@ FinancialAgent/
 │  ├─ agents/                       # 智能体层
 │  │  ├─ agent_state.py             # LangGraph 共享状态 AgentState
 │  │  ├─ analysis_context_builder.py# 按周期和日期组装分析上下文
+│  │  ├─ research_context.py        # 分析结论 + 证据目录，供下游角色使用
 │  │  ├─ llm_provider_client.py     # 多提供商大模型客户端
-│  │  ├─ analysts/                  # 分析师节点（market_analyst_agent …）
+│  │  ├─ workflow/                  # LangGraph 工作流（接入 → 分析师 → 辩论 → 提案 → 风控 → PM）
+│  │  ├─ analysts/                  # 分析师节点 + 共用的工具调用运行时
+│  │  ├─ researchers/               # 多空双研究员（发言计数 + 角色轮转）
+│  │  ├─ trader/                    # 交易提案
+│  │  ├─ risk_mgmt/                 # 进攻 / 中性 / 保守三类风控评审
+│  │  ├─ managers/                  # PM 最终决策
 │  │  ├─ tools/                     # 模型可调用的受限工具，按分析师分子目录
-│  │  │  └─ market_analyst/         # 行情分析师的 K 线统计与明细
+│  │  │  ├─ market_analyst/         # 行情：K 线统计与明细
+│  │  │  ├─ fundamental_analyst/    # 基本面：估值指标或定期财报
+│  │  │  └─ news_sentiment_analyst/ # 新闻：覆盖情况与具体条目
 │  │  └─ dataflows/                 # 数据流适配层，按主要服务的分析师分子目录
 │  │     ├─ market_analyst/         # 行情与 K 线
 │  │     ├─ fundamental_analyst/    # 财报与估值
@@ -103,7 +111,7 @@ K 线按 `(股票代码, 周期)` 缓存一份完整序列（根数由 `KLINE_*_
 ## 当前边界
 
 - 行情搜索、快照和日 K 线由 FastAPI 后端通过 AKShare 获取；周/月 K 线取自雪球接口（东财行情接口在部分网络下不可达），腾讯接口作为兜底。
-- 数据接入与行情分析师两个阶段已由后端真实执行，后者会调用所选大模型；辩论、交易提案、风控、PM 决策四个阶段尚未接入后端。
+- 六阶段链路已由 LangGraph 工作流真实执行（`POST /api/analysis/run`）：数据接入 → 三个分析师 → 多空辩论（3 轮）→ 交易提案 → 三类风控 → PM 决策，全部调用所选大模型；页面点「开始分析」会跑完整链路（约 1-2 分钟）并展示各阶段结果。交易提案仅作研究结果，不接入真实下单。
 - 页面展示仅供学习和演示，不构成投资建议。
 
 ## 代码组织约定

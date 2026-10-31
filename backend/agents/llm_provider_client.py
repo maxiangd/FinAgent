@@ -189,16 +189,15 @@ def request_chat_completion(
 ) -> dict:
     """调用支持工具调用的 OpenAI 兼容 Chat Completions 接口。"""
     url = f"{settings.base_url}/chat/completions"
-    response = _post_chat(
-        url,
-        settings,
-        {
-            "model": settings.model_name,
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": tool_choice,
-        },
-    )
+    body: dict[str, object] = {
+        "model": settings.model_name,
+        "messages": messages,
+    }
+    # 部分提供商在 tools 为空时拒绝 tool_choice，这里按需附加
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice
+    response = _post_chat(url, settings, body)
 
     if response.status_code == 429:
         raise LLMCallError(

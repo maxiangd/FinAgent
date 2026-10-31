@@ -1,8 +1,13 @@
 // 流水线状态；当前先真实执行数据接入阶段。
 
 import { reactive } from 'vue'
+import { ElMessage } from 'element-plus'
 import { STAGES } from './content'
-import { fetchDataIngestion, fetchMarketAnalysis } from '../../api/analysis'
+import { fetchDataIngestion, fetchFullAnalysis } from '../../api/analysis'
+
+const STANCE_TEXT = { bullish: '偏多', neutral: '中性', bearish: '偏空' }
+const ACTION_TEXT = { buy: '买入', hold: '持有', reduce: '减仓', avoid: '回避' }
+const DECISION_TEXT = { approve: '通过', revise: '需修改', reject: '否决' }
 
 const now = () => {
   const d = new Date()
@@ -102,23 +107,57 @@ export async function startDataIngestion(request) {
     )
 
     state.currentIndex = 1
-    pushEvent('analyst', '行情分析师', '正在调用模型分析所选区间…')
-    const analysis = await fetchMarketAnalysis(request, { signal: controller.signal })
+    pushEvent('analyst', '多智能体链路', '正在执行分析师、辩论、交易、风控与 PM 决策…')
+    const run = await fetchFullAnalysis(request, { signal: controller.signal })
     if (guard()) return
-    state.completed.analyst = analysis
-    const stanceText = ({ bullish: '偏多', neutral: '中性', bearish: '偏空' })[
-      analysis.report?.stance
-    ] || '已生成报告'
+
+    state.completed.ingest = run.ingestion || result
+    state.completed.analyst = {
+      report: run.market_report,
+      stock_name: run.stock_name,
+      stock_code: run.stock_code,
+      period: run.period,
+      actual_start_date: run.actual_start_date,
+      actual_end_date: run.actual_end_date,
+      model_name: run.model_names?.market,
+      limitations: run.limitations,
+      evidence: run.evidence,
+      fundamental_report: run.fundamental_report,
+      news_report: run.news_report,
+    }
+    state.completed.debate = run.debate_turns?.length ? run.debate_turns : null
+    state.completed.trader = run.trade_proposal || null
+    state.completed.risk = run.risk_reviews?.length ? run.risk_reviews : null
+    state.completed.pm = run.pm_decision || null
+
+    const stance = (report) => STANCE_TEXT[report?.stance] || '未给出'
     pushEvent(
       'analyst',
-      '行情分析师',
-      `${analysis.provider ? `${analysis.provider} · ` : ''}${analysis.model_name} 已完成分析：${stanceText}。`,
+      '分析师团队',
+      `三份研报：行情 ${stance(run.market_report)} · 基本面 ${stance(run.fundamental_report)} · 新闻 ${stance(run.news_report)}。`,
       'success',
     )
+    if (run.debate_turns?.length) {
+      pushEvent('debate', '多空研究员', `完成 ${run.debate_turns.length} 条辩论发言。`, 'success')
+    }
+    if (run.trade_proposal) {
+      pushEvent('trader', '交易员', `提案：${ACTION_TEXT[run.trade_proposal.action] || run.trade_proposal.action}。`, 'success')
+    }
+    if (run.risk_reviews?.length) {
+      const decisions = run.risk_reviews.map((review) => DECISION_TEXT[review.decision] || review.decision)
+      pushEvent('risk', '风控评审', `三类风控意见：${decisions.join(' / ')}。`, 'success')
+    }
+    if (run.pm_decision) {
+      const action = ACTION_TEXT[run.pm_decision.action] || run.pm_decision.action
+      pushEvent('pm', 'PM 决策', `最终结论：${action}（置信度 ${Math.round(run.pm_decision.confidence * 100)}%）。`, 'success')
+    }
     state.finished = true
   } catch (e) {
     if (e.name !== 'AbortError' && runId === myRun) {
-      pushEvent('system', '系统', `执行异常：${e.message}`, 'error')
+      const message = e.message || String(e)
+      pushEvent('system', '系统', `执行异常：${message}`, 'error')
+      // 事件流在右侧，容易漏看；同时用弹窗提示，避免误以为卡住
+      ElMessage.error(`分析失败：${message}`)
     }
   } finally {
     if (runId === myRun) {
