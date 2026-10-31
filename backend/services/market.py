@@ -11,7 +11,7 @@
 查询结果按数据类型缓存在当前 Python 进程中。
 
 对外契约：
-- get_kline      -> { code, name, dates[], items[{open,close,high,low,volume}] }
+- get_kline      -> { code, name, period, source, dates[], items[], warmup[], requested/actual date range }
 - get_snapshot   -> { code, name, industry, marketCap, price, changePct,
                       pe, pb, roe, revGrowth, profitGrowth, margin, dividendYield,
                       news[], meta }
@@ -24,7 +24,8 @@ import os
 import re
 import threading
 import time
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
+from math import ceil
 from pathlib import Path
 
 import akshare as ak
@@ -212,11 +213,18 @@ def _xq_symbol(code: str, prefix: str) -> str:
     return ("SH" if prefix == "sh" else "SZ" if prefix == "sz" else "BJ") + code
 
 
-def _fetch_xq_kline(code: str, prefix: str, period: str, limit: int) -> pd.DataFrame:
+def _fetch_xq_kline(
+    code: str,
+    prefix: str,
+    period: str,
+    limit: int,
+    end_date: date | None = None,
+) -> pd.DataFrame:
     """雪球周/月线，type=before 为前复权（乘性，与新浪日线口径一致）。"""
+    end_datetime = datetime.combine(end_date, datetime_time.max, tzinfo=_CST) if end_date else None
     params = {
         "symbol": _xq_symbol(code, prefix),
-        "begin": int(time.time() * 1000),
+        "begin": int((end_datetime.timestamp() if end_datetime else time.time()) * 1000),
         # 雪球周期取 week/month，与内部 weekly/monthly 命名不同
         "period": "week" if period == "weekly" else "month",
         "type": "before",
@@ -280,19 +288,70 @@ def _fetch_tx_kline(symbol: str, period: str, start: str, end: str, limit: int) 
     ])
 
 
+def _parse_kline_date(value, field_name: str) -> date | None:
+    """把日期参数统一转成 date；格式错误时给出清晰提示。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(f"{field_name} 必须使用 YYYY-MM-DD 格式") from exc
+
+
 @cached("kline", 300)
-def get_kline(code: str, limit=None, period: str = "daily"):
-    """获取指定数量的前复权日线、周线或月线。"""
+def get_kline(
+    code: str,
+    limit=None,
+    period: str = "daily",
+    start_date: date | str | None = None,
+    end_date: date | str | None = None,
+    warmup_bars: int = 0,
+):
+    """获取指定周期 K 线；可按日期筛选，并为指标计算额外返回预热 K 线。"""
     period = str(period).lower()
     if period not in KLINE_LIMITS:
         raise ValueError("period must be daily, weekly, or monthly")
-    limit = KLINE_LIMITS[period] if limit is None else min(max(int(limit), 1), 5000)
+    start_date = _parse_kline_date(start_date, "start_date")
+    end_date = _parse_kline_date(end_date, "end_date")
+    if (start_date is None) != (end_date is None):
+        raise ValueError("start_date 和 end_date 必须同时提供")
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("start_date 不能晚于 end_date")
+    if end_date and end_date > date.today():
+        raise ValueError("end_date 不能晚于今天")
+    try:
+        warmup_bars = int(warmup_bars)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("warmup_bars 必须是整数") from exc
+    if not 0 <= warmup_bars <= 200:
+        raise ValueError("warmup_bars 必须在 0 到 200 之间")
+    if warmup_bars and start_date is None:
+        raise ValueError("只有指定日期范围时才能请求预热 K 线")
+
+    configured_limit = KLINE_LIMITS[period] if limit is None else min(max(int(limit), 1), 5000)
     code = code.strip()
-    end = date.today()
     days_per_bar = {"daily": 2.2, "weekly": 8.5, "monthly": 37}[period]
-    lookback_days = max(1100 if period == "daily" else 0, int(limit * days_per_bar) + 45)
-    start = end - timedelta(days=lookback_days)
-    s, e = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+    if start_date and end_date:
+        fetch_start = start_date - timedelta(days=int(warmup_bars * days_per_bar) + 10)
+        fetch_end = end_date
+        # 根据自然日跨度估算所需 K 线根数，并留出节假日和周期边界余量。
+        calendar_days_per_bar = {"daily": 1.5, "weekly": 7.5, "monthly": 31}[period]
+        required_limit = ceil((fetch_end - fetch_start).days / calendar_days_per_bar) + 20
+        if required_limit > 5000:
+            raise ValueError("日期范围过长，请缩短区间后重试")
+        fetch_limit = min(required_limit, configured_limit) if limit is not None else required_limit
+    else:
+        fetch_end = date.today()
+        lookback_days = max(1100 if period == "daily" else 0, int(configured_limit * days_per_bar) + 45)
+        fetch_start = fetch_end - timedelta(days=lookback_days)
+        fetch_limit = configured_limit
+
+    s = fetch_start.strftime("%Y%m%d")
+    e = fetch_end.strftime("%Y%m%d")
 
     if code.startswith(("6", "9")):
         prefix = "sh"
@@ -311,8 +370,8 @@ def get_kline(code: str, limit=None, period: str = "daily"):
     else:
         # 东财行情接口在部分网络下直接断连，周/月线改走雪球（真实周期K线，非日线聚合）
         sources = [
-            ("雪球", lambda: _fetch_xq_kline(code, prefix, period, limit), _SINA_COLS),
-            ("腾讯", lambda: _fetch_tx_kline(symbol, period, s, e, limit), _SINA_COLS),
+            ("雪球", lambda: _fetch_xq_kline(code, prefix, period, fetch_limit, fetch_end), _SINA_COLS),
+            ("腾讯", lambda: _fetch_tx_kline(symbol, period, s, e, fetch_limit), _SINA_COLS),
         ]
 
     df, cols, errors = None, None, []
@@ -323,30 +382,70 @@ def get_kline(code: str, limit=None, period: str = "daily"):
                 result = _retry(fetch, delay=0.8)
                 if result is None or result.empty:
                     raise LookupError("empty response")
-                return result, colmap
+                return result, colmap, name
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{name}: {type(exc).__name__}: {exc}")
                 logger.warning("%s %s K线失败（%s）", code, name, f"{type(exc).__name__}: {exc}")
-        return None, None
+        return None, None, None
 
-    df, cols = try_sources(sources)
+    df, cols, source = try_sources(sources)
 
     if df is None or df.empty:
         raise LookupError(f"{code} 未获取到 K 线数据 | " + " | ".join(errors))
 
-    df = df.tail(limit)
-    dates = df[cols["date"]].astype(str).str[:10].tolist()
-    items = []
-    for _, row in df.iterrows():
-        items.append({
+    df = df.copy()
+    df["_normalized_date"] = pd.to_datetime(df[cols["date"]], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = df[df["_normalized_date"].notna()].sort_values("_normalized_date")
+    if start_date and end_date:
+        normalized_start = fetch_start.isoformat()
+        normalized_end = end_date.isoformat()
+        df = df[
+            (df["_normalized_date"] >= normalized_start)
+            & (df["_normalized_date"] <= normalized_end)
+        ]
+        if limit is not None:
+            df = df.tail(fetch_limit)
+        if df.empty:
+            raise LookupError(f"{code} 在 {start_date} 至 {end_date} 没有 K 线数据")
+        target_df = df[df["_normalized_date"] >= start_date.isoformat()]
+        warmup_df = df[df["_normalized_date"] < start_date.isoformat()].tail(warmup_bars)
+        if target_df.empty:
+            raise LookupError(f"{code} 在 {start_date} 至 {end_date} 没有 K 线数据")
+    else:
+        df = df.tail(configured_limit)
+        target_df = df
+        warmup_df = df.iloc[0:0]
+
+    def row_to_item(row):
+        return {
             "open": _num(row[cols["open"]]),
             "close": _num(row[cols["close"]]),
             "high": _num(row[cols["high"]]),
             "low": _num(row[cols["low"]]),
             "volume": _num(row[cols["volume"]], 0),
-        })
+        }
 
-    return {"code": code, "name": get_name(code), "period": period, "limit": limit, "dates": dates, "items": items}
+    dates = target_df["_normalized_date"].tolist()
+    items = [row_to_item(row) for _, row in target_df.iterrows()]
+    warmup = [
+        {"date": row["_normalized_date"], **row_to_item(row)}
+        for _, row in warmup_df.iterrows()
+    ]
+
+    return {
+        "code": code,
+        "name": get_name(code),
+        "period": period,
+        "limit": fetch_limit if start_date else configured_limit,
+        "source": source,
+        "requested_start_date": start_date.isoformat() if start_date else None,
+        "requested_end_date": end_date.isoformat() if end_date else None,
+        "actual_start_date": dates[0],
+        "actual_end_date": dates[-1],
+        "dates": dates,
+        "items": items,
+        "warmup": warmup,
+    }
 
 
 # ---------- 财务指标（新浪财务分析指标） ----------

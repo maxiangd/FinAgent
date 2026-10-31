@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def _utc_now() -> datetime:
@@ -61,10 +61,39 @@ class AnalysisTaskRequest(BaseModel):
         pattern=r"^\d{6}$",
         description="六位 A 股代码，例如 600519",
     )
+    period: Literal["daily", "weekly", "monthly"] = Field(
+        default="daily",
+        description="分析使用的 K 线周期",
+    )
+    start_date: date | None = Field(
+        default=None,
+        description="分析区间开始日期；与结束日期同时提供",
+    )
+    end_date: date | None = Field(
+        default=None,
+        description="分析区间结束日期；与开始日期同时提供",
+    )
     analysis_date: date | None = Field(
         default=None,
-        description="分析基准日期；不传时使用数据源可提供的最新数据",
+        description="兼容单一基准日期的旧请求；不传区间时使用最新数据",
     )
+
+    @model_validator(mode="after")
+    def validate_analysis_dates(self):
+        """检查日期区间完整、顺序正确且不包含未来日期。"""
+        has_start = self.start_date is not None
+        has_end = self.end_date is not None
+        if has_start != has_end:
+            raise ValueError("start_date 和 end_date 必须同时提供")
+        if has_start and self.analysis_date is not None:
+            raise ValueError("日期区间和 analysis_date 不能同时提供")
+        if has_start and self.start_date > self.end_date:
+            raise ValueError("start_date 不能晚于 end_date")
+        if self.end_date and self.end_date > date.today():
+            raise ValueError("end_date 不能晚于今天")
+        if self.analysis_date and self.analysis_date > date.today():
+            raise ValueError("analysis_date 不能晚于今天")
+        return self
 
 
 class AnalysisTaskStatusResponse(BaseModel):
@@ -74,6 +103,11 @@ class AnalysisTaskStatusResponse(BaseModel):
 
     task_id: str
     stock_code: str
+    analysis_period: Literal["daily", "weekly", "monthly"] | None = None
+    requested_start_date: date | None = None
+    requested_end_date: date | None = None
+    actual_start_date: date | None = None
+    actual_end_date: date | None = None
     analysis_date: date | None = None
     status: TaskStatus
     current_stage: AnalysisStage | None = None
@@ -192,6 +226,11 @@ class AnalysisReport(BaseModel):
 
     task_id: str
     stock_code: str
+    analysis_period: Literal["daily", "weekly", "monthly"] | None = None
+    requested_start_date: date | None = None
+    requested_end_date: date | None = None
+    actual_start_date: date | None = None
+    actual_end_date: date | None = None
     analysis_date: date | None = None
     status: TaskStatus
     evidence: list[EvidenceItem] = Field(default_factory=list)

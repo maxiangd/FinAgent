@@ -123,11 +123,45 @@
             />
             <div v-if="chartLoading" class="market-foot faint">正在加载 {{ kPeriod }} 数据…</div>
             <div v-else class="market-foot faint">
-              当前视窗：{{ lastKDateStart }} 至 {{ lastKDate }} · {{ visibleBarCount }} 根{{ kPeriod }} · 全部 {{ kCount }} 根 · 窗口末收 {{ lastKClose }} 元
+              当前视窗：{{ lastKDateStart }} 至 {{ lastKDate }} · {{ visibleBarCount }} 根{{ kPeriod }} · 全部 {{ chartTotalCount }} 根 · 窗口末收 {{ lastKClose }} 元
             </div>
           </div>
         </div>
       </el-collapse-transition>
+    </div>
+
+    <!-- 分析区间与行情图共用同一份按周期保存的日期范围 -->
+    <div v-if="selected" class="panel analysis-range-panel">
+      <div class="analysis-range-copy">
+        <div class="analysis-range-heading">
+          <span class="analysis-range-title">分析区间</span>
+          <el-tag class="analysis-period-tag" type="primary" effect="dark" size="small">
+            {{ kPeriod }}周期
+          </el-tag>
+          <el-date-picker
+            v-model="chartDateRange"
+            class="analysis-date-range-picker"
+            type="daterange"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            :clearable="false"
+            :editable="false"
+            :disabled="!selected || chartLoading"
+            size="small"
+            @change="onDateRangeChange"
+          />
+        </div>
+        <div class="faint analysis-range-sync">日期范围与上方行情图同步</div>
+      </div>
+      <div class="analysis-range-note">
+        <strong>预热说明</strong>
+        <span>
+          为计算所选区间起始处的 MA60、MACD 等技术指标，会额外加载区间开始前最多 60 根{{ kPeriod }}作为预热数据；预热数据不计入所选区间的统计。若历史数据不足 60 根，则按实际可获取数量计算。
+        </span>
+      </div>
     </div>
 
     <!-- 阶段进度 -->
@@ -213,11 +247,15 @@ let chartRequestId = 0
 const chartStock = computed(() => {
   const stock = selected.value
   const bars = chartBars.value
-  if (!stock || kPeriod.value === '日K') return stock
+  if (!stock) return stock
+  if (bars && bars.code === stock.code && bars.period === kPeriod.value) {
+    return { ...stock, kline: bars.items, dates: bars.dates, klinePeriod: kPeriod.value }
+  }
+  if (kPeriod.value === '日K' && !chartLoading.value) return stock
   if (!bars || bars.code !== stock.code || bars.period !== kPeriod.value) {
     return { ...stock, kline: [], dates: [], klinePeriod: kPeriod.value }
   }
-  return { ...stock, kline: bars.items, dates: bars.dates, klinePeriod: kPeriod.value }
+  return stock
 })
 const completedData = (s) => state.completed[s.key] || null
 const isCurrent = (i) => state.currentIndex === i
@@ -239,8 +277,45 @@ function requestDateRange(range) {
   dateRangeRequest.value = { token: dateRangeRequestId, dates: [...range] }
 }
 
-function onDateRangeChange(range) {
+async function loadChartKline(code, period, range = null) {
+  const requestId = ++chartRequestId
+  chartBars.value = null
+  chartLoading.value = true
+  try {
+    const data = await fetchKline(
+      code,
+      apiPeriod[period],
+      range,
+      range ? 60 : 0,
+    )
+    if (requestId !== chartRequestId) return
+    const combinedBars = [
+      ...(data.warmup || []),
+      ...data.items.map((item, index) => ({ date: data.dates[index], ...item })),
+    ]
+    chartBars.value = {
+      code,
+      period,
+      targetCount: data.items.length,
+      items: combinedBars.map(({ date, ...item }) => item),
+      dates: combinedBars.map((bar) => bar.date),
+    }
+  } catch (e) {
+    if (requestId === chartRequestId) {
+      chartBars.value = { code, period, targetCount: 0, items: [], dates: [] }
+      showApiError(e)
+    }
+  } finally {
+    if (requestId === chartRequestId) chartLoading.value = false
+  }
+}
+
+async function onDateRangeChange(range) {
   requestDateRange(range)
+  const code = selected.value?.code
+  if (code && Array.isArray(range) && range.length === 2) {
+    await loadChartKline(code, kPeriod.value, range)
+  }
 }
 
 const fmt = (v, n = 2) => (v == null || Number.isNaN(Number(v)) ? '暂无' : Number(v).toFixed(n))
@@ -273,6 +348,13 @@ const visibleData = computed(() => {
   return { kline: kline.slice(start, end + 1), dates: dates.slice(start, end + 1) }
 })
 const visibleBarCount = computed(() => visibleData.value.kline.length)
+const chartTotalCount = computed(() => {
+  const bars = chartBars.value
+  if (bars?.code === selected.value?.code && bars?.period === kPeriod.value) {
+    return bars.targetCount ?? bars.items.length
+  }
+  return kCount.value
+})
 const lastKDateStart = computed(() => visibleData.value.dates[0] ?? '-')
 const lastKDate = computed(() => visibleData.value.dates.at(-1) ?? '-')
 const lastKClose = computed(() => {
@@ -284,26 +366,23 @@ watch([kPeriod, () => selected.value?.code], async ([period, code], [oldPeriod, 
   if (oldCode && oldCode !== code) {
     chartDateRanges.value = { '日K': null, '周K': null, '月K': null }
     dateRangeRequest.value = null
+  }
+
+  const savedRange = chartDateRanges.value[period]
+  if (oldPeriod && oldPeriod !== period && savedRange?.length === 2) {
+    requestDateRange(savedRange)
   } else if (oldPeriod && oldPeriod !== period) {
-    const savedRange = chartDateRanges.value[period]
-    if (savedRange?.length === 2) requestDateRange(savedRange)
-    else dateRangeRequest.value = null
+    dateRangeRequest.value = null
   }
 
-  const requestId = ++chartRequestId
   chartBars.value = null
-  chartLoading.value = Boolean(code && period !== '日K')
-  if (!code || period === '日K') return
-
-  try {
-    const data = await fetchKline(code, apiPeriod[period])
-    if (requestId !== chartRequestId) return
-    chartBars.value = { code, period, items: data.items, dates: data.dates }
-  } catch (e) {
-    if (requestId === chartRequestId) showApiError(e)
-  } finally {
-    if (requestId === chartRequestId) chartLoading.value = false
+  if (!code || (period === '日K' && !savedRange?.length)) {
+    chartRequestId += 1
+    chartLoading.value = false
+    return
   }
+
+  await loadChartKline(code, period, savedRange?.length === 2 ? savedRange : null)
 })
 
 // 行情图表面板左侧的关键指标
@@ -566,6 +645,68 @@ loadByCode('600519')
   margin-top: 6px;
   font-size: 12px;
 }
+.analysis-range-panel {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.analysis-range-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 180px;
+  flex: 1;
+}
+.analysis-range-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 20px;
+  row-gap: 12px;
+}
+.analysis-range-sync {
+  margin-top: 4px;
+  font-size: 12px;
+}
+.analysis-range-title {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+}
+.analysis-period-tag {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
+  width: 370px;
+  height: 40px;
+  min-height: 40px;
+  margin-left: 12px;
+  flex: 0 0 370px;
+  --el-input-height: 40px;
+  --el-component-size: 40px;
+  --el-component-size-small: 40px;
+}
+.analysis-range-panel :deep(.analysis-date-range-picker .el-range-input) {
+  font-size: 14px;
+}
+.analysis-range-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.analysis-range-note strong {
+  flex-shrink: 0;
+  color: var(--text);
+}
 .market-body {
   display: flex;
   gap: 18px;
@@ -745,6 +886,22 @@ loadByCode('600519')
   }
   .ms-item {
     flex: 1 1 120px;
+  }
+}
+
+@media (max-width: 600px) {
+  .analysis-range-heading {
+    column-gap: 12px;
+    row-gap: 10px;
+  }
+  .analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
+    width: 100%;
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
+  .analysis-range-note {
+    flex-direction: column;
+    gap: 3px;
   }
 }
 </style>

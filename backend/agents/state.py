@@ -49,7 +49,13 @@ class AgentState(MessagesState, total=False):
 
     task_id: str
     stock_code: str
+    analysis_period: Literal["daily", "weekly", "monthly"]
     analysis_date: date | None
+    requested_analysis_date: date | None
+    requested_start_date: date | None
+    requested_end_date: date | None
+    actual_start_date: date | None
+    actual_end_date: date | None
     sender: str
     current_stage: AnalysisStage
     market_snapshot: dict[str, Any]

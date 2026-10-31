@@ -2,9 +2,10 @@
 
 import asyncio
 import logging
+from datetime import date
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from services import market as market_service
 
@@ -27,12 +28,25 @@ async def kline(
     code: str,
     period: Literal["daily", "weekly", "monthly"] = "daily",
     limit: Optional[int] = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    warmup_bars: int = Query(default=0, ge=0, le=200),
 ):
-    """获取股票 K 线数据。"""
+    """获取股票 K 线；可限定日期范围，并额外请求指标计算用的预热 K 线。"""
     try:
-        return await asyncio.to_thread(market_service.get_kline, code, limit, period)
+        return await asyncio.to_thread(
+            market_service.get_kline,
+            code,
+            limit,
+            period,
+            start_date,
+            end_date,
+            warmup_bars,
+        )
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
         logger.exception("kline 失败 %s", code)
         raise HTTPException(status_code=502, detail=f"数据源错误: {e}") from e
