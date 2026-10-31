@@ -96,6 +96,35 @@ class AnalysisTaskRequest(BaseModel):
         return self
 
 
+class DataIngestionItem(BaseModel):
+    """前端数据接入阶段的一项数据源状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    note: str
+    status: Literal["success", "partial", "failed"]
+
+
+class DataIngestionResponse(BaseModel):
+    """返回真实数据接入结果，供前端展示和后续分析复用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stock_code: str
+    stock_name: str | None = None
+    period: Literal["daily", "weekly", "monthly"]
+    requested_start_date: date | None = None
+    requested_end_date: date | None = None
+    actual_start_date: date | None = None
+    actual_end_date: date | None = None
+    items: list[DataIngestionItem] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
+    fundamentals_data: dict[str, Any] = Field(default_factory=dict)
+    news_data: dict[str, Any] = Field(default_factory=dict)
+    limitations: list[str] = Field(default_factory=list)
+
+
 class AnalysisTaskStatusResponse(BaseModel):
     """供前端查询的任务状态。"""
 

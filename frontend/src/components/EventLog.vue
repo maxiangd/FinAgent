@@ -1,17 +1,17 @@
 <template>
   <div class="event-log">
     <div class="log-head">
-      <span class="log-title">实时事件流 <span class="faint">(SSE)</span></span>
+      <span class="log-title">数据接入事件</span>
       <el-tag v-if="state.running" type="primary" effect="dark" size="small" class="live-tag">
         <span class="live-dot" /> LIVE
       </el-tag>
-      <el-tag v-else-if="state.finished" type="success" effect="dark" size="small">END</el-tag>
+      <el-tag v-else-if="state.finished" type="success" effect="dark" size="small">完成</el-tag>
       <el-tag v-else type="info" effect="plain" size="small">IDLE</el-tag>
     </div>
     <div class="log-body">
       <div v-if="!state.events.length" class="log-empty faint">
         <el-icon :size="26"><Promotion /></el-icon>
-        <div>选择一个标的并点击「开始分析」，<br />Agent 执行事件将实时推送至此</div>
+        <div>选择股票和分析区间后点击「开始接入」，<br />实际数据获取状态会显示在这里</div>
       </div>
       <div v-for="e in state.events" :key="e.id" class="log-row">
         <span class="log-time faint">{{ e.time }}</span>

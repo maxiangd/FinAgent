@@ -472,6 +472,224 @@ def _get_financial(code: str) -> dict:
         return {}
 
 
+@cached("financial_history", 86400, ttl_empty=60)
+def _get_financial_history(code: str, start_year: str) -> pd.DataFrame:
+    """获取所需起始年份以来的新浪历史财务指标。"""
+    return _retry(
+        lambda: ak.stock_financial_analysis_indicator(symbol=code, start_year=start_year),
+        times=2,
+    )
+
+
+@cached("financial_disclosures", 86400, ttl_empty=60)
+def _get_financial_disclosures(
+    code: str,
+    category: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """按公告日期获取巨潮的定期报告披露记录。"""
+    return _retry(
+        lambda: ak.stock_zh_a_disclosure_report_cninfo(
+            symbol=code,
+            market="沪深京",
+            category=category,
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+        ),
+        times=2,
+    )
+
+
+def _to_iso_date(value) -> str | None:
+    """把数据源日期转换为 YYYY-MM-DD；无效值返回 None。"""
+    if value is None or pd.isna(value):
+        return None
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date().isoformat()
+
+
+def _cell_text(value) -> str:
+    """把表格单元格转成干净文本；空值返回空字符串。"""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def _financial_report_period(title: str, category: str) -> str | None:
+    """根据公告标题和报告类别识别财报所属期。"""
+    match = re.search(r"(20\d{2})年", title)
+    if not match:
+        match = re.search(r"(20\d{2})", title)
+    if not match:
+        return None
+    year = match.group(1)
+    month_day = {
+        "一季报": "03-31",
+        "半年报": "06-30",
+        "三季报": "09-30",
+        "年报": "12-31",
+    }.get(category)
+    return f"{year}-{month_day}" if month_day else None
+
+
+def get_historical_fundamentals(
+    code: str,
+    start_date: date,
+    end_date: date,
+) -> dict:
+    """按实际披露日整理区间开始时已知及区间内新披露的财务指标。"""
+    if start_date > end_date:
+        raise ValueError("start_date 不能晚于 end_date")
+
+    code = code.strip()
+    requested_start = start_date.isoformat()
+    requested_end = end_date.isoformat()
+    disclosure_start = (start_date - timedelta(days=1095)).isoformat()
+    history_start_year = str(max(2000, start_date.year - 3))
+    limitations = [
+        "新浪历史财务指标按报告期提供；本结果使用巨潮公告日期判断该报告何时公开。",
+        "历史财务指标可能包含后续更正值，数据源不保留每次公告时的完整版本。",
+        "历史 PE、市值和股息率尚未接入历史序列，本结果不包含这些历史估值。",
+    ]
+
+    try:
+        df = _get_financial_history(code, history_start_year)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s 历史财务指标获取失败: %s: %s", code, type(e).__name__, e)
+        return {
+            "code": code,
+            "requested_start_date": requested_start,
+            "requested_end_date": requested_end,
+            "baseline": None,
+            "reports_in_range": [],
+            "limitations": [*limitations, f"历史财务指标获取失败：{type(e).__name__}。"],
+        }
+
+    if df is None or df.empty:
+        return {
+            "code": code,
+            "requested_start_date": requested_start,
+            "requested_end_date": requested_end,
+            "baseline": None,
+            "reports_in_range": [],
+            "limitations": [*limitations, "数据源没有返回历史财务指标。"],
+        }
+
+    report_date_col = next(
+        (column for column in df.columns if str(column).strip() in ("日期", "报告日期", "报告期")),
+        None,
+    )
+    if report_date_col is None:
+        return {
+            "code": code,
+            "requested_start_date": requested_start,
+            "requested_end_date": requested_end,
+            "baseline": None,
+            "reports_in_range": [],
+            "limitations": [*limitations, "历史财务数据缺少报告期字段，无法与公告对应。"],
+        }
+
+    financial_by_period: dict[str, dict] = {}
+    for _, row in df.iterrows():
+        report_date = _to_iso_date(row.get(report_date_col))
+        if not report_date:
+            continue
+        margin = next(
+            (row[column] for column in df.columns if "销售毛利率" in str(column) and pd.notna(row[column])),
+            None,
+        )
+        if margin is None:
+            margin = next(
+                (row[column] for column in df.columns if "主营业务利润率" in str(column) and pd.notna(row[column])),
+                None,
+            )
+        metrics = {
+            "report_date": report_date,
+            "roe": None,
+            "revGrowth": None,
+            "profitGrowth": None,
+            "margin": _num(margin),
+        }
+        for field, key in (
+            ("roe", "净资产收益率"),
+            ("revGrowth", "主营业务收入增长率"),
+            ("profitGrowth", "净利润增长率"),
+        ):
+            value = next(
+                (row[column] for column in df.columns if key in str(column) and pd.notna(row[column])),
+                None,
+            )
+            metrics[field] = _num(value)
+        financial_by_period[report_date] = metrics
+
+    disclosures: dict[str, dict] = {}
+    for category in ("一季报", "半年报", "三季报", "年报"):
+        try:
+            reports = _get_financial_disclosures(
+                code,
+                category,
+                disclosure_start,
+                requested_end,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s %s公告日期获取失败: %s: %s", code, category, type(e).__name__, e)
+            limitations.append(f"{category}公告日期获取失败，相关报告可能未纳入。")
+            continue
+        if reports is None or reports.empty:
+            continue
+        for _, row in reports.iterrows():
+            title = _cell_text(row.get("公告标题"))
+            report_period = _financial_report_period(title, category)
+            published_at = _to_iso_date(row.get("公告时间"))
+            if not report_period or not published_at or report_period not in financial_by_period:
+                continue
+            record = {
+                **financial_by_period[report_period],
+                "publication_date": published_at,
+                "title": title,
+                "source": "新浪历史财务指标 + 巨潮公告日期",
+            }
+            previous = disclosures.get(report_period)
+            if previous is None or published_at < previous["publication_date"]:
+                disclosures[report_period] = record
+
+    dated_reports = sorted(
+        disclosures.values(),
+        key=lambda report: (report["publication_date"], report["report_date"]),
+    )
+    baseline_candidates = [
+        report for report in dated_reports if report["publication_date"] < requested_start
+    ]
+    baseline = baseline_candidates[-1] if baseline_candidates else None
+    reports_in_range = [
+        report
+        for report in dated_reports
+        if requested_start <= report["publication_date"] <= requested_end
+    ]
+    if baseline is None:
+        limitations.append("未找到区间开始日之前已披露且能匹配到财务指标的定期报告。")
+    if not reports_in_range:
+        limitations.append("区间内没有匹配到定期报告披露；这不代表区间内没有其他公司公告。")
+
+    return {
+        "code": code,
+        "requested_start_date": requested_start,
+        "requested_end_date": requested_end,
+        "baseline": baseline,
+        "reports_in_range": reports_in_range,
+        "coverage": {
+            "financial_history_start_year": history_start_year,
+            "disclosure_query_start": disclosure_start,
+            "disclosure_query_end": requested_end,
+            "matched_report_count": len(dated_reports),
+        },
+        "limitations": limitations,
+    }
+
+
 @cached("news", 600, ttl_empty=60)
 def _get_news(code: str) -> list[dict]:
     """获取最近的个股原始新闻。"""
@@ -495,6 +713,132 @@ def _get_news(code: str) -> list[dict]:
     except Exception as e:  # noqa: BLE001
         logger.warning("%s 新闻获取失败: %s: %s", code, type(e).__name__, e)
         return []
+
+
+@cached("news_history", 600, ttl_empty=60)
+def _get_news_history_source(code: str) -> pd.DataFrame:
+    """获取东方财富接口当前可返回的个股新闻列表。"""
+    return _retry(lambda: ak.stock_news_em(symbol=code), times=2)
+
+
+@cached("company_disclosures", 3600, ttl_empty=60)
+def _get_company_disclosures(code: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """按公告日期获取区间内巨潮公司公告。"""
+    return _retry(
+        lambda: ak.stock_zh_a_disclosure_report_cninfo(
+            symbol=code,
+            market="沪深京",
+            category="",
+            start_date=start_date.replace("-", ""),
+            end_date=end_date.replace("-", ""),
+        ),
+        times=2,
+    )
+
+
+def get_historical_news(code: str, start_date: date, end_date: date) -> dict:
+    """按发布时间整理区间新闻，并补充巨潮的区间公司公告。"""
+    if start_date > end_date:
+        raise ValueError("start_date 不能晚于 end_date")
+
+    code = code.strip()
+    requested_start = start_date.isoformat()
+    requested_end = end_date.isoformat()
+    items: list[dict] = []
+    limitations: list[str] = []
+    available_news_dates: list[str] = []
+
+    try:
+        df = _get_news_history_source(code)
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                published_at = _to_iso_date(row.get("发布时间"))
+                if not published_at:
+                    continue
+                available_news_dates.append(published_at)
+                if not requested_start <= published_at <= requested_end:
+                    continue
+                title = _cell_text(row.get("新闻标题"))
+                if not title:
+                    continue
+                items.append(
+                    {
+                        "kind": "news",
+                        "title": re.sub(r"\s+", " ", title),
+                        "published_at": published_at,
+                        "source": _cell_text(row.get("文章来源")),
+                        "url": _cell_text(row.get("新闻链接")) or None,
+                    }
+                )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s 区间新闻获取失败: %s: %s", code, type(e).__name__, e)
+        limitations.append(f"东方财富个股新闻获取失败：{type(e).__name__}。")
+
+    media_coverage = {
+        "available_start_date": min(available_news_dates) if available_news_dates else None,
+        "available_end_date": max(available_news_dates) if available_news_dates else None,
+        "returned_item_count": len(available_news_dates),
+    }
+    if not available_news_dates:
+        limitations.append("东方财富接口没有返回可用于判断覆盖范围的新闻发布时间。")
+    else:
+        limitations.append(
+            "东方财富接口仅提供最近一批个股新闻，按日期筛选后仍不能保证所选区间的新闻完整。"
+        )
+        if min(available_news_dates) > requested_start or max(available_news_dates) < requested_end:
+            limitations.append(
+                "东方财富当前返回结果的日期边界没有覆盖整个所选区间；区间新闻覆盖存在缺口。"
+            )
+
+    disclosure_coverage: dict = {
+        "query_start_date": requested_start,
+        "query_end_date": requested_end,
+        "returned_item_count": 0,
+    }
+    try:
+        df = _get_company_disclosures(code, requested_start, requested_end)
+        if df is not None and not df.empty:
+            disclosure_dates: list[str] = []
+            for _, row in df.iterrows():
+                published_at = _to_iso_date(row.get("公告时间"))
+                if not published_at or not requested_start <= published_at <= requested_end:
+                    continue
+                title = _cell_text(row.get("公告标题"))
+                if not title:
+                    continue
+                disclosure_dates.append(published_at)
+                items.append(
+                    {
+                        "kind": "company_announcement",
+                        "title": re.sub(r"\s+", " ", title),
+                        "published_at": published_at,
+                        "source": "巨潮资讯",
+                        "url": _cell_text(row.get("公告链接")) or None,
+                    }
+                )
+            disclosure_coverage["returned_item_count"] = len(disclosure_dates)
+            disclosure_coverage["available_start_date"] = min(disclosure_dates) if disclosure_dates else None
+            disclosure_coverage["available_end_date"] = max(disclosure_dates) if disclosure_dates else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s 区间公司公告获取失败: %s: %s", code, type(e).__name__, e)
+        limitations.append(f"巨潮区间公司公告获取失败：{type(e).__name__}。")
+
+    # 按日期倒序排列，让较新的事件优先展示和处理。
+    items.sort(key=lambda item: item["published_at"], reverse=True)
+    if not items:
+        limitations.append("所选区间内没有获取到新闻或公司公告；不能据此断定期间没有相关事件。")
+
+    return {
+        "code": code,
+        "requested_start_date": requested_start,
+        "requested_end_date": requested_end,
+        "items": items,
+        "coverage": {
+            "media_news": media_coverage,
+            "company_announcements": disclosure_coverage,
+        },
+        "limitations": limitations,
+    }
 
 
 # ---------- 报价补充：腾讯全市场（PE/总市值/流通市值/价格/涨跌幅） ----------

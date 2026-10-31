@@ -1,179 +1,130 @@
-"""从行情服务构建 Agent 可用的初始分析上下文。"""
+"""协调各数据流并构建 Agent 初始分析上下文。"""
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
-from agents.state import AgentState
-from schemas.analysis import AnalysisStage, AnalysisTaskRequest, EvidenceItem
-from services import market as market_service
+from agents.dataflows import fundamentals_data, market_data, news_data
+from schemas.analysis import AnalysisTaskRequest, EvidenceItem
 
-
-_EVIDENCE_BAR_LIMIT = 60
-_INDICATOR_WARMUP_BARS = 60
+if TYPE_CHECKING:
+    from agents.state import AgentState
 
 
-def build_initial_agent_state(request: AnalysisTaskRequest, task_id: str) -> AgentState:
-    """按任务指定周期和日期区间取数、整理证据并初始化共享状态。
-
-    指定日期区间或单一历史基准日期时，只使用相应时点可用的 K 线；
-    当前快照、财务和新闻没有历史版本，因此不混入这类请求。
-    """
+def build_initial_context(request: AnalysisTaskRequest) -> dict[str, Any]:
+    """按任务周期和日期范围取数并组合证据，不依赖 LangGraph。"""
     code = request.stock_code
     period = request.period
     is_range_request = request.start_date is not None
     is_point_in_time_request = request.analysis_date is not None
 
-    if is_range_request:
-        raw_kline = market_service.get_kline(
-            code,
-            period=period,
-            start_date=request.start_date,
-            end_date=request.end_date,
-            warmup_bars=_INDICATOR_WARMUP_BARS,
-        )
-    else:
-        raw_kline = market_service.get_kline(code, period=period)
-
-    raw_dates = raw_kline.get("dates") or []
-    raw_items = raw_kline.get("items") or []
-    if not raw_dates or len(raw_dates) != len(raw_items):
-        raise LookupError(f"{code} 没有可用的 {period} K 线数据")
-
-    selected = list(zip(raw_dates, raw_items))
-    if is_point_in_time_request:
-        cutoff = request.analysis_date.isoformat()
-        selected = [(bar_date, item) for bar_date, item in selected if bar_date <= cutoff]
-    if not selected:
-        cutoff = request.end_date or request.analysis_date
-        raise LookupError(f"{code} 在所选区间截至 {cutoff} 没有可用的 {period} K 线数据")
-
-    dates = [bar_date for bar_date, _ in selected]
-    items = [item for _, item in selected]
-    actual_start_date = date.fromisoformat(dates[0])
-    actual_end_date = date.fromisoformat(dates[-1])
-    warmup = (raw_kline.get("warmup") or []) if is_range_request else []
-    kline_source = str(raw_kline.get("source") or "行情服务")
-    requested_start_date = request.start_date
+    raw_kline = market_data.fetch_kline_data(
+        code=code,
+        period=period,
+        start_date=request.start_date,
+        end_date=request.end_date,
+    )
     requested_end_date = request.end_date or request.analysis_date
-
-    kline_data: dict[str, Any] = {
-        "code": code,
-        "name": raw_kline.get("name"),
-        "period": period,
-        "source": kline_source,
-        "requested_start_date": requested_start_date.isoformat() if requested_start_date else None,
-        "requested_end_date": requested_end_date.isoformat() if requested_end_date else None,
-        "actual_start_date": actual_start_date.isoformat(),
-        "actual_end_date": actual_end_date.isoformat(),
-        "dates": dates,
-        "items": items,
-        "warmup": warmup,
-        "as_of": actual_end_date.isoformat(),
-    }
-
-    limitations = []
-    if requested_start_date and actual_start_date > requested_start_date:
-        limitations.append(
-            f"请求开始日期为 {requested_start_date}，区间内首个可用交易日为 {actual_start_date}。"
+    kline_data, kline_evidence, actual_start_date, actual_end_date = (
+        market_data.prepare_kline_context(
+            raw_kline=raw_kline,
+            code=code,
+            period=period,
+            requested_start_date=request.start_date,
+            requested_end_date=requested_end_date,
+            analysis_date=request.analysis_date,
         )
-    if requested_end_date and actual_end_date < requested_end_date:
-        limitations.append(
-            f"请求结束日期为 {requested_end_date}，区间内最后可用交易日为 {actual_end_date}。"
-        )
-    if is_range_request or is_point_in_time_request:
-        limitations.append(
-            "现有接口没有对应历史时点的财务、新闻和实时行情版本；本次仅纳入所选周期的 K 线。"
-        )
-    if is_range_request and len(warmup) < _INDICATOR_WARMUP_BARS:
-        limitations.append(
-            f"区间开始前仅获取到 {len(warmup)} 根预热 K 线，部分技术指标可能缺少足够历史数据。"
-        )
-
-    recent_bars = [
-        {"date": bar_date, **item}
-        for bar_date, item in selected[-_EVIDENCE_BAR_LIMIT:]
-    ]
-    evidence = [
-        EvidenceItem(
-            category="market",
-            source=kline_source,
-            observed_at=actual_end_date,
-            summary=(
-                f"{code} {period} K 线：{actual_start_date} 至 {actual_end_date}，"
-                f"共 {len(items)} 根。"
-            ),
-            data={
-                "period": period,
-                "requested_start_date": requested_start_date.isoformat() if requested_start_date else None,
-                "requested_end_date": requested_end_date.isoformat() if requested_end_date else None,
-                "actual_start_date": actual_start_date.isoformat(),
-                "actual_end_date": actual_end_date.isoformat(),
-                "bar_count": len(items),
-                "recent_bars": recent_bars,
-                "warmup_bars": warmup,
-            },
-            limitations=limitations.copy(),
-        )
-    ]
+    )
 
     market_snapshot: dict[str, Any] = {}
-    if not is_range_request and not is_point_in_time_request:
-        market_snapshot = market_service.get_snapshot(code)
-        snapshot_meta = market_snapshot.get("meta") or {}
-        snapshot_note = snapshot_meta.get("note")
-        snapshot_limits = [
-            "快照各字段没有独立的更新时间；记录时间表示本次读取时间。"
-        ]
-        if snapshot_note:
-            snapshot_limits.append(f"数据源说明：{snapshot_note}")
+    fundamentals: dict[str, Any] = {}
+    news: dict[str, Any] = {}
+    evidence: list[EvidenceItem] = [kline_evidence]
 
-        snapshot_data = {
-            key: value
-            for key, value in market_snapshot.items()
-            if key not in {"news", "meta"}
-        }
-        evidence.append(
-            EvidenceItem(
-                category="market",
-                source="AKShare 行情与基本面快照",
-                observed_at=datetime.now(timezone.utc),
-                summary=f"{market_snapshot.get('name') or code} 当前行情与基本面快照。",
-                data=snapshot_data,
-                limitations=snapshot_limits,
-            )
+    if is_range_request or is_point_in_time_request:
+        # 历史任务按公开日期获取财务和新闻；实时估值快照不用于解释过去。
+        data_start_date = request.start_date or request.analysis_date
+        data_end_date = request.end_date or request.analysis_date
+        fundamentals = fundamentals_data.fetch_historical_fundamentals(
+            code=code,
+            start_date=data_start_date,
+            end_date=data_end_date,
+        )
+        news = news_data.fetch_historical_news(
+            code=code,
+            start_date=data_start_date,
+            end_date=data_end_date,
+        )
+        observed_at = datetime.now(timezone.utc)
+        fundamental_evidence = fundamentals_data.build_historical_fundamental_evidence(
+            fundamentals=fundamentals,
+            observed_at=observed_at,
+        )
+        news_evidence = news_data.build_news_evidence(news, observed_at)
+        evidence.extend(
+            item
+            for item in (fundamental_evidence, news_evidence)
+            if item is not None
+        )
+    else:
+        # 未指定历史日期时，使用当前行情、基本面和近期新闻快照。
+        snapshot = market_data.fetch_current_snapshot(code)
+        observed_at = datetime.now(timezone.utc)
+        snapshot_meta = snapshot.get("meta") or {}
+        source_note = snapshot_meta.get("note")
+
+        market_snapshot = market_data.extract_market_snapshot(snapshot)
+        fundamentals = fundamentals_data.extract_fundamentals(snapshot)
+        news = news_data.build_current_news_data(news_data.extract_news(snapshot))
+
+        market_evidence = market_data.build_market_snapshot_evidence(
+            market_data=market_snapshot,
+            observed_at=observed_at,
+            source_note=source_note,
+        )
+        fundamental_evidence = fundamentals_data.build_fundamental_evidence(
+            fundamentals=fundamentals,
+            observed_at=observed_at,
+            source_note=source_note,
+        )
+        news_evidence = news_data.build_news_evidence(news, observed_at)
+
+        evidence.extend(
+            item
+            for item in (market_evidence, fundamental_evidence, news_evidence)
+            if item is not None
         )
 
-        news = market_snapshot.get("news") or []
-        if news:
-            evidence.append(
-                EvidenceItem(
-                    category="news",
-                    source="东方财富个股新闻（AKShare）",
-                    observed_at=datetime.now(timezone.utc),
-                    summary=f"获取到 {len(news)} 条近期个股新闻。",
-                    data={"news": news},
-                    limitations=["新闻条目时间以数据源返回值为准。"],
-                )
-            )
+    return {
+        "stock_code": code,
+        "analysis_period": period,
+        "analysis_date": actual_end_date,
+        "requested_analysis_date": request.analysis_date,
+        "requested_start_date": request.start_date,
+        "requested_end_date": requested_end_date,
+        "actual_start_date": actual_start_date,
+        "actual_end_date": actual_end_date,
+        "market_snapshot": market_snapshot,
+        "fundamentals_data": fundamentals,
+        "news_data": news,
+        "kline_data": kline_data,
+        "evidence": evidence,
+    }
 
+
+def build_initial_agent_state(request: AnalysisTaskRequest, task_id: str) -> AgentState:
+    """将数据接入上下文包装成 LangGraph 的共享状态。"""
+    from agents.state import AgentState
+    from schemas.analysis import AnalysisStage
+
+    context = build_initial_context(request)
     return AgentState(
         messages=[],
         task_id=task_id,
-        stock_code=code,
-        analysis_period=period,
-        analysis_date=actual_end_date,
-        requested_analysis_date=request.analysis_date,
-        requested_start_date=requested_start_date,
-        requested_end_date=requested_end_date,
-        actual_start_date=actual_start_date,
-        actual_end_date=actual_end_date,
         sender="data_ingestion",
         current_stage=AnalysisStage.INGEST,
-        market_snapshot=market_snapshot,
-        kline_data=kline_data,
-        evidence=evidence,
+        **context,
         investment_debate_state={
             "bull_history": [],
             "bear_history": [],

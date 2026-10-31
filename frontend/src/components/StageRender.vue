@@ -2,10 +2,23 @@
   <div class="stage-render">
     <!-- 1. 数据接入 -->
     <div v-if="stageKey === 'ingest' && data" class="ingest-wrap">
+      <div class="ingest-range muted">
+        {{ data.stock_name || '股票' }}（{{ data.stock_code }}）·
+        {{ periodName(data.period) }} ·
+        {{ data.actual_start_date || '—' }} 至 {{ data.actual_end_date || '—' }}
+      </div>
       <div v-for="(item, i) in data.items" :key="i" class="ingest-item">
-        <el-icon class="ok"><CircleCheckFilled /></el-icon>
+        <el-icon class="ingest-status" :class="item.status">
+          <CircleCheckFilled v-if="item.status === 'success'" />
+          <WarningFilled v-else />
+        </el-icon>
         <div class="ingest-body">
-          <div class="ingest-name">{{ item.name }}</div>
+          <div class="ingest-name">
+            {{ item.name }}
+            <el-tag :type="ingestionStatusType(item)" effect="plain" size="small">
+              {{ ingestionStatusLabel(item) }}
+            </el-tag>
+          </div>
           <div class="ingest-note">{{ item.note }}</div>
         </div>
       </div>
@@ -13,6 +26,38 @@
         <el-tag v-for="(v, k) in data.meta" :key="k" effect="plain" size="small" class="meta-tag">
           {{ k }}：{{ v }}
         </el-tag>
+      </div>
+
+      <div v-if="financialRows.length" class="ingest-detail-block">
+        <div class="ingest-detail-title">财务数据时间点</div>
+        <div v-for="(row, i) in financialRows" :key="i" class="ingest-financial-row">
+          <b>{{ row.label }}</b>
+          <span>ROE {{ pct(row.roe) }}</span>
+          <span>营收增速 {{ pct(row.revGrowth) }}</span>
+          <span>净利增速 {{ pct(row.profitGrowth) }}</span>
+          <span>毛利率 {{ pct(row.margin) }}</span>
+        </div>
+      </div>
+
+      <div v-if="data.news_data?.items?.length" class="ingest-detail-block">
+        <div class="ingest-detail-title">
+          区间事件
+          <span class="faint">共 {{ data.news_data.total_count ?? data.news_data.items.length }} 条，按日期倒序</span>
+        </div>
+        <div v-for="(item, i) in data.news_data.items" :key="`${item.published_at || item.time}-${i}`" class="ingest-news-row">
+          <span class="ingest-news-date faint">{{ item.published_at || item.time || '日期未知' }}</span>
+          <el-tag v-if="item.kind" size="small" effect="plain" :type="item.kind === 'company_announcement' ? 'info' : 'success'">
+            {{ item.kind === 'company_announcement' ? '公司公告' : '新闻' }}
+          </el-tag>
+          <a v-if="item.url" :href="item.url" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+          <span v-else>{{ item.title }}</span>
+          <span v-if="item.source" class="faint">{{ item.source }}</span>
+        </div>
+      </div>
+
+      <div v-if="data.limitations?.length" class="ingest-limitations">
+        <div class="ingest-detail-title">数据说明</div>
+        <div v-for="(note, i) in data.limitations" :key="i">{{ note }}</div>
       </div>
     </div>
 
@@ -144,7 +189,39 @@
 </template>
 
 <script setup>
-defineProps({ stageKey: { type: String, required: true }, data: { type: Object, required: true } })
+import { computed } from 'vue'
+
+const props = defineProps({ stageKey: { type: String, required: true }, data: { type: Object, required: true } })
+
+const periodName = (period) => ({ daily: '日K', weekly: '周K', monthly: '月K' })[period] || period
+const pct = (value) => value == null ? '暂无' : `${Number(value).toFixed(2)}%`
+const ingestionStatusLabel = (item) => {
+  if (item.status === 'success') return '已获取'
+  if (item.status === 'failed') return '获取失败'
+  return item.name === '新闻与公司公告' ? '覆盖有限' : '数据不完整'
+}
+const ingestionStatusType = (item) => (
+  item.status === 'success' ? 'success' : item.status === 'failed' ? 'danger' : 'warning'
+)
+const financialRows = computed(() => {
+  const data = props.data?.fundamentals_data || {}
+  const rows = []
+  if (data.baseline) {
+    rows.push({
+      label: `区间前基线：${data.baseline.report_date}（公告 ${data.baseline.publication_date}）`,
+      ...data.baseline,
+    })
+  } else if (data.roe != null || data.revGrowth != null || data.profitGrowth != null || data.margin != null) {
+    rows.push({ label: '当前基本面快照', ...data })
+  }
+  for (const report of data.reports_in_range || []) {
+    rows.push({
+      label: `区间内披露：${report.report_date}（公告 ${report.publication_date}）`,
+      ...report,
+    })
+  }
+  return rows
+})
 </script>
 
 <style scoped>
@@ -163,14 +240,28 @@ defineProps({ stageKey: { type: String, required: true }, data: { type: Object, 
   border-radius: 8px;
   background: var(--panel-2);
 }
-.ingest-item .ok {
-  color: var(--down);
+.ingest-range {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ingest-status {
   font-size: 16px;
   margin-top: 2px;
+  flex-shrink: 0;
+}
+.ingest-status.success {
+  color: var(--down);
+}
+.ingest-status.partial,
+.ingest-status.failed {
+  color: var(--gold);
 }
 .ingest-name {
   font-weight: 600;
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .ingest-note {
   font-size: 13px;
@@ -180,6 +271,58 @@ defineProps({ stageKey: { type: String, required: true }, data: { type: Object, 
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+.ingest-detail-block,
+.ingest-limitations {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.ingest-detail-title {
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ingest-financial-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ingest-financial-row b {
+  color: var(--text);
+}
+.ingest-news-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ingest-news-date {
+  flex: 0 0 86px;
+  font-variant-numeric: tabular-nums;
+}
+.ingest-news-row a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.ingest-news-row a:hover {
+  text-decoration: underline;
+}
+.ingest-limitations {
+  color: var(--gold);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.ingest-limitations .ingest-detail-title {
+  color: var(--text);
 }
 
 /* 分析师 */

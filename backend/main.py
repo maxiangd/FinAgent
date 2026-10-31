@@ -9,6 +9,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from routers.analysis import router as analysis_router
 from routers.health import router as health_router
 from routers.market import router as market_router
 
@@ -25,6 +26,7 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(market_router)
+app.include_router(analysis_router)
 
 
 if __name__ == "__main__":

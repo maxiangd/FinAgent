@@ -1,8 +1,8 @@
 // 后端数据 API 封装（vite dev 代理 /api -> http://127.0.0.1:8000）
 import { ElMessage } from 'element-plus'
 
-async function request(path) {
-  const res = await fetch(path)
+async function request(path, options = {}) {
+  const res = await fetch(path, options)
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {
@@ -35,6 +35,16 @@ export async function fetchKline(code, period = 'daily', range = null, warmupBar
 // 按代码或名称搜索股票，返回 [{code, name}] 候选
 export async function searchStock(q) {
   return request(`/api/search?q=${encodeURIComponent(q)}`)
+}
+
+// 执行一次真实的数据接入预览，日期范围由页面当前选择传入。
+export async function fetchDataIngestion(payload, { signal } = {}) {
+  return request('/api/analysis/ingest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
 }
 
 // 加载完整标的数据：快照 + K线，组装为前端 selected 结构

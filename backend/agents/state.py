@@ -59,6 +59,8 @@ class AgentState(MessagesState, total=False):
     sender: str
     current_stage: AnalysisStage
     market_snapshot: dict[str, Any]
+    fundamentals_data: dict[str, Any]
+    news_data: dict[str, Any]
     kline_data: dict[str, Any]
     evidence: list[EvidenceItem]
     market_report: AnalystFinding

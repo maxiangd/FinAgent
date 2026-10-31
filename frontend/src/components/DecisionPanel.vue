@@ -66,8 +66,8 @@
     <!-- 空态 -->
     <div v-else class="panel decision-idle">
       <el-icon :size="40"><Flag /></el-icon>
-      <div class="muted">等待分析任务执行…</div>
-      <div class="faint" style="font-size: 12px">执行完成后，PM 决策将在此汇总展示</div>
+      <div class="muted">等待分析流程接入…</div>
+      <div class="faint" style="font-size: 12px">当前先跑通真实数据接入；后续分析阶段接入 LLM 后再生成 PM 决策</div>
       <div class="faint" style="font-size: 11px; margin-top: 10px">数据接入 → 研报 → 辩论 → 提案 → 风控 → 决策</div>
     </div>
   </div>

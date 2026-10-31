@@ -1,6 +1,6 @@
 <template>
   <div class="home">
-    <!-- 顶部：标的搜索 + 运行控制 -->
+    <!-- 顶部：标的搜索与查询 -->
     <div class="panel toolbar">
       <div class="search-box">
         <el-select
@@ -19,15 +19,10 @@
           <el-option v-for="c in candidates" :key="c.code" :label="`${c.name}（${c.code}）`" :value="c.code" />
         </el-select>
         <el-button type="primary" :icon="Search" :loading="loading" @click="onPickFirst">查询</el-button>
-        <el-button type="primary" plain :icon="VideoPlay" :disabled="!selected || state.running" @click="start">
-          开始分析
-        </el-button>
-        <el-button :icon="VideoPause" :disabled="!state.running" @click="stop">停止</el-button>
-        <el-button :icon="Refresh" :disabled="!selected || state.running" @click="reset">重置</el-button>
       </div>
       <div class="mode-badge">
         <el-tag effect="dark" type="success" size="small">AKShare 真实数据</el-tag>
-        <el-tag effect="plain" size="small" type="info">LangGraph 后端规划中</el-tag>
+        <el-tag effect="plain" size="small" type="info">后端数据接入已连通 · LLM 待接入</el-tag>
       </div>
     </div>
 
@@ -138,21 +133,46 @@
           <el-tag class="analysis-period-tag" type="primary" effect="dark" size="small">
             {{ kPeriod }}周期
           </el-tag>
-          <el-date-picker
-            v-model="chartDateRange"
-            class="analysis-date-range-picker"
-            type="daterange"
-            format="YYYY-MM-DD"
-            value-format="YYYY-MM-DD"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            :clearable="false"
-            :editable="false"
-            :disabled="!selected || chartLoading"
-            size="small"
-            @change="onDateRangeChange"
-          />
+          <div class="analysis-range-controls">
+            <el-date-picker
+              v-model="chartDateRange"
+              class="analysis-date-range-picker"
+              type="daterange"
+              format="YYYY-MM-DD"
+              value-format="YYYY-MM-DD"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              :clearable="false"
+              :editable="false"
+              :disabled="!selected || chartLoading"
+              size="small"
+              @change="onDateRangeChange"
+            />
+            <el-button
+              class="analysis-start-button"
+              type="primary"
+              :icon="VideoPlay"
+              :disabled="!selected || state.running"
+              @click="start"
+            >
+              开始接入
+            </el-button>
+            <el-button
+              :icon="VideoPause"
+              :disabled="!state.running"
+              @click="stop"
+            >
+              停止
+            </el-button>
+            <el-button
+              :icon="Refresh"
+              :disabled="!selected || state.running"
+              @click="reset"
+            >
+              重置
+            </el-button>
+          </div>
         </div>
         <div class="faint analysis-range-sync">日期范围与上方行情图同步</div>
       </div>
@@ -177,9 +197,24 @@
               <span class="stage-idx">{{ i + 1 }}</span>
               <span class="stage-label">{{ s.label }}</span>
               <span class="stage-desc faint">{{ s.desc }}</span>
+              <el-button
+                v-if="s.key === 'ingest'"
+                text
+                size="small"
+                :icon="ingestExpanded ? Fold : Expand"
+                @click="ingestExpanded = !ingestExpanded"
+              >
+                {{ ingestExpanded ? '收起详情' : '展开数据' }}
+              </el-button>
               <el-tag type="success" effect="dark" size="small" class="stage-state">完成</el-tag>
             </div>
-            <StageRender :stage-key="s.key" :data="completedData(s)" />
+            <el-collapse-transition>
+              <StageRender
+                v-show="s.key !== 'ingest' || ingestExpanded"
+                :stage-key="s.key"
+                :data="completedData(s)"
+              />
+            </el-collapse-transition>
           </div>
           <div v-else-if="isCurrent(i)" class="panel stage-section running-section">
             <div class="stage-head">
@@ -213,7 +248,7 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
-import { state, startSimulation, stopSimulation, selectStock, chartPrefs } from '../features/analysis/pipeline'
+import { state, startDataIngestion, stopDataIngestion, selectStock, chartPrefs } from '../features/analysis/pipeline'
 import { fetchKline, loadStock, searchStock, showApiError } from '../api/market'
 import StageProgress from '../components/StageProgress.vue'
 import StageRender from '../components/StageRender.vue'
@@ -227,6 +262,7 @@ const searching = ref(false)
 const loading = ref(false)
 let searchTimer = null
 const chartOpen = ref(true)
+const ingestExpanded = ref(false)
 const kPeriod = ref('日K')
 const periodOptions = ['日K', '周K', '月K']
 const apiPeriod = { 日K: 'daily', 周K: 'weekly', 月K: 'monthly' }
@@ -512,12 +548,23 @@ async function onPickFirst() {
 }
 
 function start() {
-  startSimulation()
+  ingestExpanded.value = false
+  const range = chartDateRange.value
+  const request = {
+    stock_code: selected.value.code,
+    period: apiPeriod[kPeriod.value],
+  }
+  if (Array.isArray(range) && range.length === 2) {
+    request.start_date = range[0]
+    request.end_date = range[1]
+  }
+  startDataIngestion(request)
 }
 function stop() {
-  stopSimulation()
+  stopDataIngestion()
 }
 function reset() {
+  ingestExpanded.value = false
   if (state.selected) selectStock(state.selected)
 }
 
@@ -679,11 +726,16 @@ loadByCode('600519')
   font-weight: 700;
   letter-spacing: 0.3px;
 }
+.analysis-range-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: 8px;
+}
 .analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
   width: 370px;
   height: 40px;
   min-height: 40px;
-  margin-left: 12px;
   flex: 0 0 370px;
   --el-input-height: 40px;
   --el-component-size: 40px;
@@ -896,8 +948,13 @@ loadByCode('600519')
   }
   .analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
     width: 100%;
-    margin-left: 0;
     flex: 1 1 100%;
+  }
+  .analysis-range-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-left: 0;
   }
   .analysis-range-note {
     flex-direction: column;
