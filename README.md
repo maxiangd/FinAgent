@@ -60,3 +60,7 @@ Vite 默认运行在 `http://localhost:5173`，并将 `/api` 请求转发给 `12
 - 按业务领域归类代码：行情相关逻辑放在 `features/market`，分析流程放在 `features/analysis`。
 - Vue 响应式状态和纯计算逻辑使用模块与函数组织；只在需要封装独立状态和行为时引入类。
 - 后端数据获取保持在 `services`，HTTP 路由和应用入口放在 `main.py`。
+
+## 开发路线
+
+真实多智能体工作流的分阶段实施计划见[Agent 工作流实施路线](./docs/AGENT_WORKFLOW_ROADMAP.md)。
