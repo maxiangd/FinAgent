@@ -23,6 +23,7 @@
       <div class="mode-badge">
         <el-tag effect="dark" type="success" size="small">AKShare 真实数据</el-tag>
         <el-tag effect="plain" size="small" type="info">{{ providerTagText }}</el-tag>
+        <el-button text size="small" :icon="Clock" @click="openHistory">历史任务</el-button>
       </div>
     </div>
 
@@ -258,17 +259,50 @@
         </div>
       </div>
     </div>
+
+    <el-drawer v-model="historyOpen" title="历史任务" size="420px" direction="rtl">
+      <div v-loading="historyLoading" class="history-list">
+        <div
+          v-for="task in historyTasks"
+          :key="task.task_id"
+          class="history-item"
+          @click="restoreTask(task.task_id)"
+        >
+          <div class="history-line">
+            <b>{{ task.stock_code }}</b>
+            <span class="faint">{{ periodText(task.period) }}</span>
+            <el-tag size="small" :type="historyTagType(task.status)">
+              {{ historyStatusText(task.status) }}
+            </el-tag>
+          </div>
+          <div class="faint history-time">
+            {{ formatTime(task.created_at) }} · {{ task.task_id.slice(0, 8) }}
+          </div>
+        </div>
+        <div v-if="!historyLoading && !historyTasks.length" class="faint">暂无历史任务</div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search } from '@element-plus/icons-vue'
+import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search, Clock } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
-import { state, startDataIngestion, stopDataIngestion, selectStock, chartPrefs } from '../features/analysis/pipeline'
+import {
+  state,
+  startAnalysis,
+  stopAnalysis,
+  resumeTask,
+  applyTaskResult,
+  readLastTask,
+  clearLastTask,
+  selectStock,
+  chartPrefs,
+} from '../features/analysis/pipeline'
 import { fetchKline, loadStock, searchStock } from '../api/market'
-import { fetchLLMProviders } from '../api/analysis'
+import { fetchLLMProviders, fetchRecentTasks, getAnalysisTask } from '../api/analysis'
 import { showApiError } from '../api/http'
 import StageProgress from '../components/StageProgress.vue'
 import StageRender from '../components/StageRender.vue'
@@ -589,10 +623,10 @@ function start() {
     request.end_date = range[1]
   }
   if (provider.value) request.provider = provider.value
-  startDataIngestion(request)
+  startAnalysis(request)
 }
 function stop() {
-  stopDataIngestion()
+  stopAnalysis()
 }
 function reset() {
   ingestExpanded.value = false
@@ -615,10 +649,85 @@ async function loadProviders() {
   }
 }
 
+const historyOpen = ref(false)
+const historyTasks = ref([])
+const historyLoading = ref(false)
+const PERIOD_LABEL = { daily: '日K', weekly: '周K', monthly: '月K' }
+const HISTORY_STATUS = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消' }
+const periodText = (period) => PERIOD_LABEL[period] || '-'
+const historyStatusText = (status) => HISTORY_STATUS[status] || status
+const historyTagType = (status) =>
+  ({ completed: 'success', running: 'primary', failed: 'danger', cancelled: 'info' })[status] || 'info'
+const formatTime = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+async function loadRecentTasks() {
+  historyLoading.value = true
+  try {
+    historyTasks.value = await fetchRecentTasks(10)
+  } catch {
+    historyTasks.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+function openHistory() {
+  historyOpen.value = true
+  loadRecentTasks()
+}
+
+// 载入某个任务：已完成直接渲染结果，运行中则续订 SSE
+async function restoreTask(taskId) {
+  historyOpen.value = false
+  try {
+    const task = await getAnalysisTask(taskId)
+    const request = task.request || {}
+    if (request.stock_code && request.stock_code !== state.selected?.code) {
+      await loadByCode(request.stock_code)
+    }
+    const periodLabel = PERIOD_LABEL[request.period] || '日K'
+    kPeriod.value = periodLabel
+    chartDateRanges.value[periodLabel] =
+      request.start_date && request.end_date ? [request.start_date, request.end_date] : null
+
+    if (task.status === 'completed' && task.result) {
+      applyTaskResult(task.result)
+      ElMessage.success('已载入历史分析结果')
+    } else if (task.status === 'running' || task.status === 'queued') {
+      await resumeTask(taskId)
+    } else {
+      const reason = task.error?.message ? `：${task.error.message}` : ''
+      ElMessage.warning(`该任务状态为「${historyStatusText(task.status)}」${reason}`)
+    }
+  } catch (e) {
+    showApiError(e)
+  }
+}
+
+// 刷新页面后恢复上次任务；没有可用任务时加载默认标的
+async function restoreSavedTask() {
+  const saved = readLastTask()
+  if (!saved?.taskId) {
+    loadByCode('600519')
+    return
+  }
+  try {
+    const task = await getAnalysisTask(saved.taskId)
+    if (!task || task.status === 'cancelled') throw new Error('saved task unavailable')
+    await restoreTask(saved.taskId)
+  } catch {
+    clearLastTask()
+    loadByCode('600519')
+  }
+}
+
 onMounted(() => {
   loadProviders()
-  // 默认加载贵州茅台（真实数据）
-  loadByCode('600519')
+  restoreSavedTask()
 })
 </script>
 
@@ -1013,5 +1122,31 @@ onMounted(() => {
     flex-direction: column;
     gap: 3px;
   }
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+}
+.history-item {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.history-item:hover {
+  outline: 1px solid rgba(120, 130, 160, 0.35);
+}
+.history-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-time {
+  font-size: 12px;
 }
 </style>

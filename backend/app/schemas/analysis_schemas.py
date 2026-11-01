@@ -353,3 +353,30 @@ class AnalysisRunResponse(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     errors: list[AnalysisError] = Field(default_factory=list)
+
+
+class AnalysisTaskResponse(BaseModel):
+    """任务状态查询响应。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    status: TaskStatus
+    created_at: datetime
+    updated_at: datetime
+    request: AnalysisTaskRequest | None = None
+    error: AnalysisError | None = None
+    result: AnalysisRunResponse | None = None
+
+
+class AnalysisTaskSummary(BaseModel):
+    """任务列表中的一条记录。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    status: TaskStatus
+    stock_code: str
+    period: Literal["daily", "weekly", "monthly"] | None = None
+    created_at: datetime
+    updated_at: datetime

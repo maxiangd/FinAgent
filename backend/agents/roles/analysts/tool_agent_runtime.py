@@ -54,8 +54,8 @@ def extract_json_object(text: str) -> dict | None:
     return None
 
 
-def parse_json_report(content: Any, model_cls: type[ReportT]) -> ReportT:
-    """把模型输出解析成指定的报告模型；失败时抛出可识别的错误。"""
+def parse_json_payload(content: Any) -> dict[str, Any]:
+    """把模型输出解析成 JSON 对象（不做结构校验）。"""
     text = content_text(content)
     if not text:
         raise LLMCallError("模型没有返回分析报告文本。")
@@ -70,23 +70,40 @@ def parse_json_report(content: Any, model_cls: type[ReportT]) -> ReportT:
             raise LLMCallError(
                 "模型输出不是约定的 JSON 格式，请检查所选模型的结构化输出能力。"
             ) from None
+    if not isinstance(payload, dict):
+        raise LLMCallError("模型输出的 JSON 不是对象。")
+    return payload
+
+
+def _validation_detail(exc: Exception) -> str:
+    """把 pydantic 校验错误压成一行可读提示。"""
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return ""
+    try:
+        return "；".join(
+            f"{'.'.join(str(part) for part in error.get('loc', []))}: {error.get('msg', '')}"
+            for error in errors()[:3]
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def validate_report(payload: dict[str, Any], model_cls: type[ReportT]) -> ReportT:
+    """按报告模型校验字段；失败时把具体字段错误带进消息。"""
     try:
         return model_cls.model_validate(payload)
     except Exception as exc:  # noqa: BLE001
         logger.warning("模型 JSON 字段不符合结构：%s", str(payload)[:300])
-        detail = ""
-        errors = getattr(exc, "errors", None)
-        if callable(errors):
-            try:
-                detail = "；".join(
-                    f"{'.'.join(str(part) for part in error.get('loc', []))}: {error.get('msg', '')}"
-                    for error in errors()[:3]
-                )
-            except Exception:  # noqa: BLE001
-                detail = ""
+        detail = _validation_detail(exc)
         raise LLMCallError(
             f"模型 JSON 字段不符合约定的报告结构{'：' + detail if detail else ''}"
         ) from exc
+
+
+def parse_json_report(content: Any, model_cls: type[ReportT]) -> ReportT:
+    """把模型输出解析并校验成指定的报告模型。"""
+    return validate_report(parse_json_payload(content), model_cls)
 
 
 def run_structured_completion(

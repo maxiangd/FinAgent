@@ -1,13 +1,14 @@
-// 流水线状态；当前先真实执行数据接入阶段。
+// 分析流水线：创建后台任务并订阅 SSE，阶段进度实时更新。
 
 import { reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { STAGES } from './content'
-import { fetchDataIngestion, fetchFullAnalysis } from '../../api/analysis'
-
-const STANCE_TEXT = { bullish: '偏多', neutral: '中性', bearish: '偏空' }
-const ACTION_TEXT = { buy: '买入', hold: '持有', reduce: '减仓', avoid: '回避' }
-const DECISION_TEXT = { approve: '通过', revise: '需修改', reject: '否决' }
+import {
+  analysisTaskEventsUrl,
+  cancelAnalysisTask,
+  createAnalysisTask,
+  getAnalysisTask,
+} from '../../api/analysis'
 
 const now = () => {
   const d = new Date()
@@ -21,8 +22,9 @@ export const state = reactive({
   finished: false,
   currentIndex: -1, // 正在执行的阶段下标
   completed: {}, // { [stageKey]: 该阶段生成的结构化数据 }
-  events: [], // SSE 风格事件日志
+  events: [], // 事件日志（来自后端 SSE）
   elapsed: 0, // 运行耗时(秒)
+  taskId: null,
 })
 
 // 行情图表偏好（全局响应式，供 Home / KLineChart 直接读写，绕过 prop 链路）
@@ -32,9 +34,38 @@ export const chartPrefs = reactive({
   rangeBox: false, // 区间最高/最低的箱体虚线（默认只显示两个小箭头）
 })
 
+const STAGE_INDEX = Object.fromEntries(STAGES.map((stage, index) => [stage.key, index]))
+const STAGE_LABEL = Object.fromEntries(STAGES.map((stage) => [stage.key, stage.label]))
+const LAST_TASK_KEY = 'finagent:lastTask'
+
+export function saveLastTask(taskId) {
+  try {
+    localStorage.setItem(LAST_TASK_KEY, JSON.stringify({ taskId, savedAt: Date.now() }))
+  } catch {
+    /* 隐私模式下可能不可用，忽略即可 */
+  }
+}
+
+export function readLastTask() {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_TASK_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+
+export function clearLastTask() {
+  try {
+    localStorage.removeItem(LAST_TASK_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
 let runId = 0
 let timer = null
-let activeController = null
+let activeSource = null
+let activeTaskId = null
 
 function pushEvent(stageKey, agent, text, type = 'info') {
   state.events.unshift({ id: Symbol('e'), time: now(), stage: stageKey, agent, text, type })
@@ -43,23 +74,27 @@ function pushEvent(stageKey, agent, text, type = 'info') {
 }
 
 export function selectStock(stock) {
-  stopDataIngestion()
+  stopAnalysis()
   state.selected = stock
   state.completed = {}
   state.events = []
   state.finished = false
   state.currentIndex = -1
   state.elapsed = 0
-  state.progress = 0
+  state.taskId = null
 }
 
-export function stopDataIngestion() {
+export function stopAnalysis() {
   runId++
   state.running = false
   state.currentIndex = -1
-  if (activeController) {
-    activeController.abort()
-    activeController = null
+  if (activeSource) {
+    activeSource.close()
+    activeSource = null
+  }
+  if (activeTaskId) {
+    cancelAnalysisTask(activeTaskId).catch(() => {})
+    activeTaskId = null
   }
   if (timer) {
     clearInterval(timer)
@@ -67,109 +102,196 @@ export function stopDataIngestion() {
   }
 }
 
-export async function startDataIngestion(request) {
-  const s = state.selected
-  if (!s || state.running) return
-
-  stopDataIngestion()
-  const myRun = ++runId
-  const controller = new AbortController()
-  activeController = controller
-
+function beginRun() {
   state.running = true
   state.finished = false
   state.completed = {}
   state.events = []
   state.elapsed = 0
   state.currentIndex = 0
-
   timer = setInterval(() => {
     if (state.running) state.elapsed++
   }, 1000)
+}
 
-  const guard = () => runId !== myRun // 被新任务/停止打断
+function endRun(myRun) {
+  if (runId !== myRun) return
+  state.running = false
+  state.currentIndex = -1
+  activeTaskId = null
+  if (activeSource) {
+    activeSource.close()
+    activeSource = null
+  }
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+export async function startAnalysis(request) {
+  const stock = state.selected
+  if (!stock || state.running) return
+
+  stopAnalysis()
+  const myRun = ++runId
+  beginRun()
 
   try {
-    state.currentIndex = 0
-    const rangeText = request.start_date && request.end_date
-      ? `${request.start_date} 至 ${request.end_date}`
-      : '最新可用区间'
-    pushEvent('ingest', '数据接入', `正在接入 ${s.name}（${s.code}）${request.period} 数据，${rangeText}…`)
-    const result = await fetchDataIngestion(request, { signal: controller.signal })
-    if (guard()) return
-    state.completed.ingest = result
-    const klineItem = result.items?.find((item) => item.name === 'K线行情')
-    pushEvent(
-      'ingest',
-      '数据接入',
-      klineItem?.note || '行情、基本面与新闻数据已返回。',
-      'success',
-    )
-
-    state.currentIndex = 1
-    pushEvent('analyst', '多智能体链路', '正在执行分析师、辩论、交易、风控与 PM 决策…')
-    const run = await fetchFullAnalysis(request, { signal: controller.signal })
-    if (guard()) return
-
-    state.completed.ingest = run.ingestion || result
-    state.completed.analyst = {
-      report: run.market_report,
-      stock_name: run.stock_name,
-      stock_code: run.stock_code,
-      period: run.period,
-      actual_start_date: run.actual_start_date,
-      actual_end_date: run.actual_end_date,
-      model_name: run.model_names?.market,
-      limitations: run.limitations,
-      evidence: run.evidence,
-      fundamental_report: run.fundamental_report,
-      news_report: run.news_report,
+    const task = await createAnalysisTask(request)
+    if (runId !== myRun) {
+      cancelAnalysisTask(task.task_id).catch(() => {})
+      return
     }
-    state.completed.debate = run.debate_turns?.length ? run.debate_turns : null
-    state.completed.trader = run.trade_proposal || null
-    state.completed.risk = run.risk_reviews?.length ? run.risk_reviews : null
-    state.completed.pm = run.pm_decision || null
-
-    const stance = (report) => STANCE_TEXT[report?.stance] || '未给出'
-    pushEvent(
-      'analyst',
-      '分析师团队',
-      `三份研报：行情 ${stance(run.market_report)} · 基本面 ${stance(run.fundamental_report)} · 新闻 ${stance(run.news_report)}。`,
-      'success',
-    )
-    if (run.debate_turns?.length) {
-      pushEvent('debate', '多空研究员', `完成 ${run.debate_turns.length} 条辩论发言。`, 'success')
-    }
-    if (run.trade_proposal) {
-      pushEvent('trader', '交易员', `提案：${ACTION_TEXT[run.trade_proposal.action] || run.trade_proposal.action}。`, 'success')
-    }
-    if (run.risk_reviews?.length) {
-      const decisions = run.risk_reviews.map((review) => DECISION_TEXT[review.decision] || review.decision)
-      pushEvent('risk', '风控评审', `三类风控意见：${decisions.join(' / ')}。`, 'success')
-    }
-    if (run.pm_decision) {
-      const action = ACTION_TEXT[run.pm_decision.action] || run.pm_decision.action
-      pushEvent('pm', 'PM 决策', `最终结论：${action}（置信度 ${Math.round(run.pm_decision.confidence * 100)}%）。`, 'success')
-    }
-    state.finished = true
+    activeTaskId = task.task_id
+    state.taskId = task.task_id
+    saveLastTask(task.task_id)
+    pushEvent('system', '任务', `任务 ${task.task_id.slice(0, 8)} 已创建，开始执行。`)
+    await followTask(task.task_id, myRun)
   } catch (e) {
-    if (e.name !== 'AbortError' && runId === myRun) {
-      const message = e.message || String(e)
-      pushEvent('system', '系统', `执行异常：${message}`, 'error')
-      // 事件流在右侧，容易漏看；同时用弹窗提示，避免误以为卡住
-      ElMessage.error(`分析失败：${message}`)
-    }
+    if (runId === myRun) reportError(e)
   } finally {
-    if (runId === myRun) {
-      state.running = false
-      state.currentIndex = -1
-      activeController = null
-      if (timer) {
-        clearInterval(timer)
-        timer = null
+    endRun(myRun)
+  }
+}
+
+export async function resumeTask(taskId) {
+  if (state.running) return
+  stopAnalysis()
+  const myRun = ++runId
+  beginRun()
+  activeTaskId = taskId
+  state.taskId = taskId
+  saveLastTask(taskId)
+  pushEvent('system', '任务', `已恢复任务 ${taskId.slice(0, 8)} 的订阅。`)
+  try {
+    await followTask(taskId, myRun)
+  } catch (e) {
+    if (runId === myRun) reportError(e)
+  } finally {
+    endRun(myRun)
+  }
+}
+
+export function applyTaskResult(result) {
+  applyResult(result)
+}
+
+function followTask(taskId, myRun) {
+  return new Promise((resolve, reject) => {
+    const seen = new Set()
+    const source = new EventSource(analysisTaskEventsUrl(taskId))
+    activeSource = source
+
+    source.onmessage = (message) => {
+      if (runId !== myRun) {
+        source.close()
+        resolve()
+        return
+      }
+      let event
+      try {
+        event = JSON.parse(message.data)
+      } catch {
+        return
+      }
+      if (seen.has(event.event_id)) return // 断线重连时不重复处理
+      seen.add(event.event_id)
+      handleEvent(event)
+
+      if (event.event_type === 'task_completed') {
+        source.close()
+        getAnalysisTask(taskId)
+          .then((task) => {
+            applyResult(task.result)
+            resolve()
+          })
+          .catch(reject)
+      } else if (event.event_type === 'task_failed') {
+        source.close()
+        reject(new Error(event.message || '分析失败'))
+      } else if (event.event_type === 'task_cancelled') {
+        source.close()
+        resolve()
       }
     }
+
+    source.onerror = () => {
+      // 服务端在任务结束后会关闭连接；运行中则由 EventSource 自动重连
+      if (runId !== myRun) {
+        source.close()
+        resolve()
+      }
+    }
+  })
+}
+
+function handleEvent(event) {
+  const stage = event.stage
+  if (event.event_type === 'stage_started' && stage) {
+    state.currentIndex = STAGE_INDEX[stage] ?? state.currentIndex
+    pushEvent(stage, STAGE_LABEL[stage] || stage, event.message || '开始执行。')
+    return
   }
+  if (event.event_type === 'stage_completed' && stage) {
+    // 事件里带上了该阶段的结果，收到即可渲染，不必等整条任务结束
+    applyStagePayload(stage, event.payload || {})
+    pushEvent(stage, STAGE_LABEL[stage] || stage, event.message || '完成。', 'success')
+    return
+  }
+  if (event.event_type === 'task_queued' || event.event_type === 'task_started') {
+    pushEvent('system', '任务', event.message || '')
+    return
+  }
+  if (event.event_type === 'task_completed') {
+    pushEvent('system', '任务', event.message || '分析完成。', 'success')
+  }
+}
+
+function applyStagePayload(stage, payload) {
+  if (stage === 'ingest' && payload.ingestion) {
+    state.completed.ingest = payload.ingestion
+  } else if (stage === 'analyst' && payload.analyst) {
+    state.completed.analyst = payload.analyst
+  } else if (stage === 'debate' && payload.debate_turns) {
+    state.completed.debate = payload.debate_turns.length ? payload.debate_turns : null
+  } else if (stage === 'trader' && payload.trade_proposal) {
+    state.completed.trader = payload.trade_proposal
+  } else if (stage === 'risk' && payload.risk_reviews) {
+    state.completed.risk = payload.risk_reviews.length ? payload.risk_reviews : null
+  } else if (stage === 'pm' && payload.pm_decision) {
+    state.completed.pm = payload.pm_decision
+  }
+}
+
+function applyResult(run) {
+  if (!run) return
+  state.completed.ingest = run.ingestion || null
+  state.completed.analyst = {
+    report: run.market_report,
+    stock_name: run.stock_name,
+    stock_code: run.stock_code,
+    period: run.period,
+    actual_start_date: run.actual_start_date,
+    actual_end_date: run.actual_end_date,
+    model_name: run.model_names?.market,
+    limitations: run.limitations,
+    evidence: run.evidence,
+    fundamental_report: run.fundamental_report,
+    news_report: run.news_report,
+  }
+  state.completed.debate = run.debate_turns?.length ? run.debate_turns : null
+  state.completed.trader = run.trade_proposal || null
+  state.completed.risk = run.risk_reviews?.length ? run.risk_reviews : null
+  state.completed.pm = run.pm_decision || null
+  state.finished = true
+}
+
+function reportError(e) {
+  if (e?.name === 'AbortError') return
+  const message = e?.message || String(e)
+  pushEvent('system', '系统', `执行异常：${message}`, 'error')
+  ElMessage.error(`分析失败：${message}`)
 }
 
 export function progressPercent() {

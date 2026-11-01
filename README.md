@@ -20,11 +20,12 @@ FinancialAgent/
 │  │  ├─ research_context.py        # 分析结论 + 证据目录，供下游角色使用
 │  │  ├─ llm_provider_client.py     # 多提供商大模型客户端
 │  │  ├─ workflow/                  # LangGraph 工作流（接入 → 分析师 → 辩论 → 提案 → 风控 → PM）
-│  │  ├─ analysts/                  # 分析师节点 + 共用的工具调用运行时
-│  │  ├─ researchers/               # 多空双研究员（发言计数 + 角色轮转）
-│  │  ├─ trader/                    # 交易提案
-│  │  ├─ risk_mgmt/                 # 进攻 / 中性 / 保守三类风控评审
-│  │  ├─ managers/                  # PM 最终决策
+│  │  ├─ roles/                     # 五个阶段的角色节点
+│  │  │  ├─ analysts/               # 行情 / 基本面 / 新闻情绪分析师 + 工具调用运行时
+│  │  │  ├─ researchers/            # 多空双研究员（发言计数 + 角色轮转）
+│  │  │  ├─ trader/                 # 交易提案
+│  │  │  ├─ risk_mgmt/              # 进攻 / 中性 / 保守三类风控评审
+│  │  │  └─ managers/               # PM 最终决策
 │  │  ├─ tools/                     # 模型可调用的受限工具，按分析师分子目录
 │  │  │  ├─ market_analyst/         # 行情：K 线统计与明细
 │  │  │  ├─ fundamental_analyst/    # 基本面：估值指标或定期财报
@@ -108,10 +109,57 @@ Redis 连不上时会自动回退到进程内缓存，并在日志里打一条 W
 
 K 线按 `(股票代码, 周期)` 缓存一份完整序列（根数由 `KLINE_*_LIMIT` 决定），图表加载与后续分析共用同一次取数，指定日期区间的请求直接从这份序列本地切片并补齐预热；请求更早的历史区间时才会重新回源。
 
+## 任务持久化
+
+任务、阶段事件和最终报告写入 MongoDB，配置项为 `MONGO_URL` / `MONGO_DB`（默认 `finagent`）：
+
+| 集合 | 内容 |
+| --- | --- |
+| `finagent.analysis_tasks` | 任务请求、状态、全部阶段事件、最终报告 |
+
+MongoDB 不可用时自动回退为仅进程内保存。服务重启后按 `task_id` 仍能查到已完成任务；重启前仍在运行的任务会被标记为 `failed`（`code=interrupted`），不会留下永远 running 的记录。
+
+前端会在 localStorage 记住最近一次任务：刷新页面后自动恢复该任务的股票、周期与区间——运行中的任务继续订阅 SSE，已完成的直接展示结果；工具栏「历史任务」可查看最近 10 个任务并载入结果。
+
+## 接口
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/analysis/tasks` | 创建分析任务，立即返回 `task_id`，后台执行六阶段链路 |
+| GET | `/api/analysis/tasks?limit=20` | 最近的分析任务（含服务重启前的历史任务） |
+| GET | `/api/analysis/tasks/{task_id}` | 查询任务状态与最终结果 |
+| GET | `/api/analysis/tasks/{task_id}/events` | SSE 事件流（阶段开始/完成、任务完成/失败/取消，支持断线续传） |
+| POST | `/api/analysis/tasks/{task_id}/cancel` | 请求取消运行中的任务 |
+| POST | `/api/analysis/ingest` | 只执行数据接入，用于预览 |
+| POST | `/api/analysis/run` | 同步执行完整链路（脚本/调试用） |
+| GET | `/api/stock/{code}/kline`、`/api/stock/{code}/snapshot`、`/api/search` | 行情数据 |
+
+## 评测
+
+`backend/scripts/run_evaluation.py` 用固定样例批量跑完整链路，统计成功率、各阶段耗时、模型调用次数与 token、证据引用覆盖率与失败原因，输出到 `docs/evaluation/`：
+
+```bash
+cd backend
+python scripts/run_evaluation.py --limit 4   # 不传 --limit 则跑全部样例
+```
+
+每次运行生成 `results-<时间>.csv`（逐样例明细）和 `summary-<时间>.md`（汇总），可直接用于对比提示词或模型调整前后的效果。
+
+最近一次运行（2026-11-01，4 个样例，智谱 `glm-4-flash-250414`）：
+
+| 指标 | 结果 |
+| --- | --- |
+| 成功率 | 4/4（100%） |
+| 平均耗时 | 90.8s |
+| 平均模型调用 | 17.8 次（prompt 26.5k / completion 3.1k tokens） |
+| 证据引用覆盖率 | 100%，无效引用 0 |
+| 阶段耗时 | 接入 2.6s · 分析师 25.5s · 辩论 27.7s · 交易 6.0s · 风控 19.6s · PM 8.3s |
+| PM 决策分布 | hold 2 / buy 2 |
+
 ## 当前边界
 
 - 行情搜索、快照和日 K 线由 FastAPI 后端通过 AKShare 获取；周/月 K 线取自雪球接口（东财行情接口在部分网络下不可达），腾讯接口作为兜底。
-- 六阶段链路已由 LangGraph 工作流真实执行（`POST /api/analysis/run`）：数据接入 → 三个分析师 → 多空辩论（3 轮）→ 交易提案 → 三类风控 → PM 决策，全部调用所选大模型；页面点「开始分析」会跑完整链路（约 1-2 分钟）并展示各阶段结果。交易提案仅作研究结果，不接入真实下单。
+- 六阶段链路已由 LangGraph 工作流真实执行：数据接入 → 三个分析师 → 多空辩论（3 轮）→ 交易提案 → 三类风控 → PM 决策，全部调用所选大模型；页面点「开始分析」会创建后台任务，通过 SSE 实时更新阶段进度，完成后展示各阶段结果（约 1-2 分钟）。交易提案仅作研究结果，不接入真实下单。
 - 页面展示仅供学习和演示，不构成投资建议。
 
 ## 代码组织约定

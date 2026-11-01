@@ -1,0 +1,5 @@
+﻿sample,stock_code,period,start_date,end_date,status,duration_s,llm_calls,prompt_tokens,completion_tokens,error_code,error_message,ingest_s,analyst_s,debate_s,trader_s,risk_s,pm_s,debate_turns,risk_reviews,pm_action,pm_confidence,evidence_units,evidence_coverage,invalid_citations,task_id
+600519-daily-2026-09-01-2026-09-30,600519,daily,2026-09-01,2026-09-30,completed,87.1,17,24195,3064,,,1.7,20.5,29.6,6.7,20.1,7.8,6,3,hold,0.6,13,1.0,0,0b49ed8d4e834539a350b51f70256b2b
+600519-weekly-2026-01-05-2026-10-30,600519,weekly,2026-01-05,2026-10-30,completed,96.0,19,30940,3229,,,2.7,26.7,30.0,5.7,22.9,7.7,6,3,hold,0.7,13,1.0,0,219701cdc8f74861a3fb1a31eaa9282b
+000001-daily-2026-06-01-2026-09-30,000001,daily,2026-06-01,2026-09-30,completed,93.0,18,27670,3092,,,2.3,28.5,27.8,6.1,17.4,8.5,6,3,buy,0.7,14,1.0,0,a265f03f5857419aabf251d60ed6aa48
+300750-daily-2026-03-02-2026-06-30,300750,daily,2026-03-02,2026-06-30,completed,87.0,17,23396,3031,,,3.6,26.2,23.4,5.4,17.9,9.2,6,3,buy,0.7,14,1.0,0,7018c49185c5410ba7e8837ac5f2f2e2

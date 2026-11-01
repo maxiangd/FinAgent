@@ -17,7 +17,10 @@ from agents.llm_provider_client import (
     load_llm_settings,
 )
 from agents.workflow import get_analysis_workflow, initial_workflow_state
-from app.presenters.analysis_response_builder import build_ingestion_response
+from app.presenters.analysis_response_builder import (
+    build_ingestion_response,
+    build_run_response,
+)
 from app.schemas.analysis_schemas import (
     AnalysisRunResponse,
     AnalysisStage,
@@ -122,45 +125,6 @@ async def analyze_market(request: AnalysisTaskRequest):
 
 @router.post("/run", response_model=AnalysisRunResponse)
 async def run_analysis(request: AnalysisTaskRequest):
-    """执行完整分析工作流，返回各阶段结论与最终状态摘要。"""
+    """同步执行完整分析工作流，返回各阶段结论（保留给脚本和调试使用）。"""
     state = await _execute_workflow(request)
-    evidence = list(state.get("evidence") or [])
-    kline = state.get("kline_data") or {}
-    debate_state = state.get("investment_debate_state") or {}
-    risk_state = state.get("risk_debate_state") or {}
-    model_names = {
-        key: value
-        for key, value in {
-            "market": state.get("market_model_name"),
-            "fundamental": state.get("fundamental_model_name"),
-            "news": state.get("news_model_name"),
-        }.items()
-        if value
-    }
-    return AnalysisRunResponse(
-        task_id=state.get("task_id") or "",
-        stock_code=request.stock_code,
-        stock_name=kline.get("name"),
-        period=request.period,
-        actual_start_date=state["actual_start_date"],
-        actual_end_date=state["actual_end_date"],
-        current_stage=state.get("current_stage") or AnalysisStage.PM,
-        sender=state.get("sender"),
-        provider=state.get("market_provider"),
-        ingestion=build_ingestion_response(request, state),
-        market_report=state["market_report"],
-        fundamental_report=state.get("fundamentals_report"),
-        news_report=state.get("news_report"),
-        debate_turns=list(debate_state.get("history") or []),
-        trade_proposal=state.get("trade_proposal"),
-        risk_reviews=list(risk_state.get("history") or []),
-        pm_decision=state.get("pm_decision"),
-        model_names=model_names,
-        evidence=evidence,
-        limitations=list(dict.fromkeys(
-            limitation
-            for item in evidence
-            for limitation in item.limitations
-        )),
-        errors=list(state.get("errors") or []),
-    )
+    return build_run_response(request, state, state.get("task_id") or "")

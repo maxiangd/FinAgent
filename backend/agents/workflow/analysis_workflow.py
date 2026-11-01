@@ -14,21 +14,21 @@ from langgraph.graph import END, START, StateGraph
 
 from agents.agent_state import AgentState
 from agents.analysis_context_builder import build_initial_context
-from agents.analysts.fundamental_analyst_agent import fundamental_analyst_node
-from agents.analysts.market_analyst_agent import market_analyst_node
-from agents.analysts.news_sentiment_analyst_agent import news_sentiment_analyst_node
-from agents.managers.portfolio_manager_agent import portfolio_manager_node
-from agents.researchers.debate_researchers import (
+from agents.roles.analysts.fundamental_analyst_agent import fundamental_analyst_node
+from agents.roles.analysts.market_analyst_agent import market_analyst_node
+from agents.roles.analysts.news_sentiment_analyst_agent import news_sentiment_analyst_node
+from agents.roles.managers.portfolio_manager_agent import portfolio_manager_node
+from agents.roles.researchers.debate_researchers import (
     bear_researcher_node,
     bull_researcher_node,
     debate_should_continue,
 )
-from agents.risk_mgmt.risk_review_agents import (
+from agents.roles.risk_mgmt.risk_review_agents import (
     aggressive_risk_node,
     conservative_risk_node,
     neutral_risk_node,
 )
-from agents.trader.trader_agent import trade_proposal_node
+from agents.roles.trader.trader_agent import trade_proposal_node
 from app.schemas.analysis_schemas import AnalysisStage, AnalysisTaskRequest
 
 

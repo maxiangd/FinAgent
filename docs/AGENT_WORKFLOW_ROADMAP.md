@@ -15,13 +15,14 @@
 | LangGraph 共享 AgentState | 已按 MessagesState、辩论子状态和工具调用计数定义初稿 |
 | Agent 数据流模块 | 已按行情 K 线、基本面和新闻拆分；由上下文构建器统一编排 |
 | 分析上下文数据流 | K 线按用户区间读取；历史任务按披露日整理基本面、按发布时间整理新闻和巨潮公告，并标注覆盖限制；历史实时估值快照暂不可回溯 |
-| 前端数据接入阶段 | 已连接 `POST /api/analysis/ingest`；「开始分析」改为调用 `POST /api/analysis/run`，跑完整链路后展示六个阶段的真实结果 |
+| 前端数据接入阶段 | 「开始分析」创建后台任务并订阅 SSE 实时更新；刷新页面会自动恢复上次任务（运行中续订、已完成直接展示），工具栏提供最近任务列表 |
 | 分析师研报 | 行情、基本面、新闻情绪三个分析师均已接入真实模型，共用工具调用运行时（证据引用校验 + JSON 格式纠正） |
 | LangGraph 执行图 | 完整链路：接入 → 三个分析师 → 多空辩论（条件边控制轮次）→ 交易员 → 三类风控 → PM；`/run` 跑全链路，`/market` 只跑行情节点 |
 | 多空辩论 / 交易 / 风控 / PM | 已接入真实模型：Bullish/Bearish 各 3 次发言（发言计数终止）、TradeProposal、三类 RiskReview、PMDecision |
 | 缓存 | 支持进程内 / Redis 两种后端；K 线按 (代码, 周期) 缓存完整序列，图表与分析共用一次取数 |
-| 分析任务 API、真实 SSE | 尚未实现；当前为同步接口 |
-| 任务和报告持久化、运行评测 | 尚未实现 |
+| 分析任务 API、真实 SSE | 已实现 `POST /tasks`、`GET /tasks/{id}`、`GET /tasks/{id}/events`（SSE，支持 Last-Event-ID 断线续传）、`POST /tasks/{id}/cancel`；任务表当前在进程内 |
+| 任务与报告持久化 | 已写入 MongoDB（`analysis_tasks` 集合），重启后可查询；不可用时回退内存，运行中任务重启后标记 interrupted |
+| 运行评测 | 已实现 `backend/scripts/run_evaluation.py`：4 个固定样例成功率 100%，平均 90.8s、17.8 次模型调用，证据引用覆盖率 100% |
 
 ## 目标工作流
 
@@ -145,4 +146,4 @@ flowchart LR
 
 六阶段链路已在 LangGraph 中跑通：三个分析师共用 `tool_agent_runtime`（工具循环、证据校验、JSON 纠正），研究员、交易员、风控与 PM 共用 `run_structured_completion`（单次结构化调用 + 纠错）；辩论用条件边按发言计数终止。
 
-下一步：把一次性请求改成异步任务——`POST /tasks` 创建任务、`GET /tasks/{id}` 查询状态、`GET /tasks/{id}/events` 用 SSE 推送阶段事件（全链路约 2 分钟，当前页面只能等整条请求返回），前端从单次请求切换为事件驱动；随后补任务与报告持久化（MongoDB）和固定样例集评测。
+下一步：部署与多 worker——任务表与 SSE 事件改用 Redis/Mongo 广播，支撑多进程运行；补 Docker Compose（后端 + 前端 + Redis + MongoDB）；再按评测结果调优提示词与成本。

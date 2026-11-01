@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -20,6 +21,21 @@ class UnknownProviderError(LLMConfigurationError):
 
 class LLMCallError(RuntimeError):
     """模型服务请求或响应失败。"""
+
+
+# 进程级调用统计，供评测汇总使用
+_call_stats = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+_call_stats_lock = threading.Lock()
+
+
+def reset_call_stats() -> None:
+    with _call_stats_lock:
+        _call_stats.update(calls=0, prompt_tokens=0, completion_tokens=0)
+
+
+def get_call_stats() -> dict[str, int]:
+    with _call_stats_lock:
+        return dict(_call_stats)
 
 
 @dataclass(frozen=True)
@@ -222,6 +238,11 @@ def request_chat_completion(
         payload = response.json()
     except ValueError as exc:
         raise LLMCallError("模型服务返回的内容不是有效 JSON。") from exc
+    usage = payload.get("usage") or {}
+    with _call_stats_lock:
+        _call_stats["calls"] += 1
+        _call_stats["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+        _call_stats["completion_tokens"] += int(usage.get("completion_tokens") or 0)
     choices = payload.get("choices") or []
     if not choices or not isinstance(choices[0].get("message"), dict):
         raise LLMCallError("模型服务响应缺少 choices[0].message。")

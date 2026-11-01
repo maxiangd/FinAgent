@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agents.analysts.tool_agent_runtime import parse_json_report, run_tool_agent
+from agents.roles.analysts.tool_agent_runtime import (
+    parse_json_payload,
+    run_tool_agent,
+    validate_report,
+)
 from agents.llm_provider_client import LLMSettings, load_llm_settings
 from agents.tools.market_analyst.market_data_tools import build_market_tools
 from app.schemas.analysis_schemas import AnalysisStage, EvidenceItem, MarketAnalystReport
@@ -18,10 +22,24 @@ _SYSTEM_PROMPT = """你是 FinAgent 的行情分析师，只分析本次任务�
 不要给出买入、卖出、仓位或目标价建议。
 调用工具拿到数据后，直接输出最终结果；不要输出分析过程、进度说明或"接下来我将…"这类文字。
 最终只返回一个 JSON 对象，字段为：
-stance (bullish/neutral/bearish), conclusion (string), key_points (array of {text, evidence_ids}),
-confidence (0 到 1), data_gaps (string array)。"""
+stance (bullish/neutral/bearish), conclusion (string), key_points (array),
+confidence (0 到 1), data_gaps (string array)。
+key_points 的每个元素必须是对象，形如 {"text": "结论", "evidence_ids": ["证据 id"]}；
+evidence_ids 只能放在每个 key_points 元素内部，不要在顶层另加 evidence_ids 字段。"""
 
 _INSTRUCTION = "请分析下面任务范围内的 K 线。先使用工具读取统计，再按需要查询 K 线细节。"
+
+
+def _parse_market_report(content: Any) -> MarketAnalystReport:
+    """解析行情报告；兼容模型把 evidence_ids 写在顶层、key_points 内缺失的情况。"""
+    payload = parse_json_payload(content)
+    top_level_ids = payload.pop("evidence_ids", None)
+    points = payload.get("key_points")
+    if isinstance(points, list):
+        for point in points:
+            if isinstance(point, dict):
+                point.setdefault("evidence_ids", list(top_level_ids or []))
+    return validate_report(payload, MarketAnalystReport)
 
 
 def run_market_analyst(
@@ -65,7 +83,7 @@ def run_market_analyst(
         tool_schemas=tool_schemas,
         execute_tool=execute_tool,
         required_tool="get_window_statistics",
-        parse_report=lambda content: parse_json_report(content, MarketAnalystReport),
+        parse_report=_parse_market_report,
         citation_ids=lambda report: {
             evidence_id
             for point in report.key_points

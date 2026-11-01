@@ -1,6 +1,6 @@
 """多空研究员。"""
 
-from agents.researchers.debate_researchers import (
+from agents.roles.researchers.debate_researchers import (
     DEBATE_ROUNDS,
     bear_researcher_node,
     bull_researcher_node,

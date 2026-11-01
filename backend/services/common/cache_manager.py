@@ -86,6 +86,19 @@ class RedisCacheBackend:
 _backend = None
 _backend_lock = threading.Lock()
 
+_key_locks: dict[str, threading.Lock] = {}
+_key_locks_guard = threading.Lock()
+
+
+def _key_lock(cache_key: str) -> threading.Lock:
+    """同一缓存键的单飞锁，避免并发重复请求数据源。"""
+    with _key_locks_guard:
+        lock = _key_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _key_locks[cache_key] = lock
+        return lock
+
 
 def get_cache_backend():
     """返回缓存后端；首次调用时按配置初始化，Redis 不可用则回退内存。"""
@@ -126,6 +139,7 @@ def cached(key: str, ttl: float, ttl_empty: float = 0):
 
     ttl_empty>0 时，空结果（None/{} /[]）只按更短的 ttl_empty 缓存，
     避免一次网络抖动把"没有数据"冻住整个缓存周期（如代码表 24 小时）。
+    同一 key 并发未命中时只让一个线程去取，其余等它填好，避免重复请求数据源。
     """
     def deco(fn):
         """接收原函数并返回带缓存的版本。"""
@@ -136,10 +150,14 @@ def cached(key: str, ttl: float, ttl_empty: float = 0):
             found, value = backend.get(cache_key)
             if found:
                 return value
-            result = fn(*a, **kw)
-            life = ttl_empty if (ttl_empty and _is_empty(result)) else ttl
-            backend.set(cache_key, result, life)
-            return result
+            with _key_lock(cache_key):
+                found, value = backend.get(cache_key)
+                if found:
+                    return value
+                result = fn(*a, **kw)
+                life = ttl_empty if (ttl_empty and _is_empty(result)) else ttl
+                backend.set(cache_key, result, life)
+                return result
         return wrapper
     return deco
 

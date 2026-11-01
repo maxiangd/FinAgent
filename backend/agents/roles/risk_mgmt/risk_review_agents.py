@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agents.analysts.tool_agent_runtime import run_structured_completion
+from agents.roles.analysts.tool_agent_runtime import run_structured_completion
 from agents.llm_provider_client import load_llm_settings
 from agents.research_context import (
     build_analysis_summary,

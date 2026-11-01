@@ -1,8 +1,10 @@
-"""把 Agent 初始状态整理成数据接入阶段的展示结构。"""
+"""把 Agent 状态整理成接口响应。"""
 
 from __future__ import annotations
 
 from app.schemas.analysis_schemas import (
+    AnalysisRunResponse,
+    AnalysisStage,
     AnalysisTaskRequest,
     DataIngestionItem,
     DataIngestionResponse,
@@ -172,4 +174,52 @@ def build_ingestion_response(request: AnalysisTaskRequest, state: dict) -> DataI
         fundamentals_data=fundamentals,
         news_data=displayed_news,
         limitations=limitations,
+    )
+
+
+def build_run_response(
+    request: AnalysisTaskRequest,
+    state: dict,
+    task_id: str,
+) -> AnalysisRunResponse:
+    """把工作流的最终状态整理成运行摘要。"""
+    evidence = list(state.get("evidence") or [])
+    kline = state.get("kline_data") or {}
+    debate_state = state.get("investment_debate_state") or {}
+    risk_state = state.get("risk_debate_state") or {}
+    model_names = {
+        key: value
+        for key, value in {
+            "market": state.get("market_model_name"),
+            "fundamental": state.get("fundamental_model_name"),
+            "news": state.get("news_model_name"),
+        }.items()
+        if value
+    }
+    return AnalysisRunResponse(
+        task_id=task_id,
+        stock_code=request.stock_code,
+        stock_name=kline.get("name"),
+        period=request.period,
+        actual_start_date=state["actual_start_date"],
+        actual_end_date=state["actual_end_date"],
+        current_stage=state.get("current_stage") or AnalysisStage.PM,
+        sender=state.get("sender"),
+        provider=state.get("market_provider"),
+        ingestion=build_ingestion_response(request, state),
+        market_report=state["market_report"],
+        fundamental_report=state.get("fundamentals_report"),
+        news_report=state.get("news_report"),
+        debate_turns=list(debate_state.get("history") or []),
+        trade_proposal=state.get("trade_proposal"),
+        risk_reviews=list(risk_state.get("history") or []),
+        pm_decision=state.get("pm_decision"),
+        model_names=model_names,
+        evidence=evidence,
+        limitations=list(dict.fromkeys(
+            limitation
+            for item in evidence
+            for limitation in item.limitations
+        )),
+        errors=list(state.get("errors") or []),
     )

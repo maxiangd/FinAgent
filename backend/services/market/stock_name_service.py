@@ -56,3 +56,8 @@ def search_stock(q: str, limit: int = 8) -> list[dict]:
             seen.add(c["code"])
             out.append(c)
     return out[:limit]
+
+
+def warm_code_table() -> None:
+    """预热代码表（首次抓取约 8 秒），避免首屏卡在名称查询上。"""
+    _code_name_table()
