@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.paper_service as paper
+import app.services.paper_service as paper
 from app.schemas.analysis_schemas import TaskStatus
 
 

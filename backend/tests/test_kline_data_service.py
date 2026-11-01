@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-import services.common.cache_manager as cache
-import services.market.kline_data_service as kline
+import data_sources.common.cache_manager as cache
+import data_sources.market.kline_data_service as kline
 
 
 def _frame(start="2026-01-01", periods=40):

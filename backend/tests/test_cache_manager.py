@@ -3,7 +3,7 @@
 import threading
 import time
 
-import services.common.cache_manager as cache
+import data_sources.common.cache_manager as cache
 
 
 def setup_function():

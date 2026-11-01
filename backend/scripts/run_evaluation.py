@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agents.llm_provider_client import get_call_stats, reset_call_stats
 from app.schemas.analysis_schemas import AnalysisTaskRequest, TaskStatus
-from app.task_manager import task_manager
+from app.services.task_manager import task_manager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = PROJECT_ROOT / "docs" / "evaluation"

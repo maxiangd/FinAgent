@@ -55,38 +55,28 @@ def load_context_node(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-ANALYST_NODES = {
-    "market": ("market_analyst", market_analyst_node),
-    "fundamental": ("fundamental_analyst", fundamental_analyst_node),
-    "news": ("news_sentiment_analyst", news_sentiment_analyst_node),
-}
+ANALYST_STEPS = (
+    ("market_analyst", market_analyst_node),
+    ("fundamental_analyst", fundamental_analyst_node),
+    ("news_sentiment_analyst", news_sentiment_analyst_node),
+)
 
-ALL_ANALYSTS = tuple(ANALYST_NODES)
-
-_workflows: dict[tuple[tuple[str, ...], bool], Any] = {}
+_workflow = None
 _workflow_lock = threading.Lock()
 
 
-def build_analysis_workflow(
-    analysts: tuple[str, ...] = ALL_ANALYSTS,
-    include_decision: bool = True,
-):
-    """按需构建工作流：数据接入 → 分析师 →（可选的）辩论、提案、风控与 PM。"""
+def build_analysis_workflow():
+    """固定链路：数据接入 → 三个分析师（串行）→ 辩论 → 提案 → 风控 → PM。"""
     graph = StateGraph(AgentState)
     graph.add_node("load_context", load_context_node)
     graph.add_edge(START, "load_context")
 
+    # 串行而非并行：免费模型并发受限，串行也更利于阶段事件按顺序推送
     previous = "load_context"
-    for stage in analysts:
-        node_name, node_fn = ANALYST_NODES[stage]
+    for node_name, node_fn in ANALYST_STEPS:
         graph.add_node(node_name, node_fn)
-        # 先用固定顺序串行，避免免费模型并发受限；后续可改为并行分支
         graph.add_edge(previous, node_name)
         previous = node_name
-
-    if not include_decision:
-        graph.add_edge(previous, END)
-        return graph.compile()
 
     graph.add_node("bull_researcher", bull_researcher_node)
     graph.add_node("bear_researcher", bear_researcher_node)
@@ -112,17 +102,14 @@ def build_analysis_workflow(
     return graph.compile()
 
 
-def get_analysis_workflow(
-    analysts: tuple[str, ...] = ALL_ANALYSTS,
-    include_decision: bool = True,
-):
-    """返回进程内复用的已编译工作流（按阶段组合缓存）。"""
-    key = (tuple(analysts), include_decision)
-    if key not in _workflows:
+def get_analysis_workflow():
+    """返回进程内复用的已编译工作流。"""
+    global _workflow
+    if _workflow is None:
         with _workflow_lock:
-            if key not in _workflows:
-                _workflows[key] = build_analysis_workflow(*key)
-    return _workflows[key]
+            if _workflow is None:
+                _workflow = build_analysis_workflow()
+    return _workflow
 
 
 def initial_workflow_state(

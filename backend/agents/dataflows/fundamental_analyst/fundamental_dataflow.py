@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Any, Mapping
 
 from app.schemas.analysis_schemas import EvidenceItem
-from services.analysis.fundamental_data_service import get_historical_fundamentals
+from data_sources.analysis.fundamental_data_service import get_historical_fundamentals
 
 
 _FUNDAMENTAL_FIELDS = (

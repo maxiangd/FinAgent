@@ -6,8 +6,8 @@ from datetime import date, datetime
 from typing import Any, Mapping
 
 from app.schemas.analysis_schemas import EvidenceItem
-from services.market.kline_data_service import get_kline
-from services.market.market_snapshot_service import get_snapshot
+from data_sources.market.kline_data_service import get_kline
+from data_sources.market.market_snapshot_service import get_snapshot
 
 
 EVIDENCE_BAR_LIMIT = 60

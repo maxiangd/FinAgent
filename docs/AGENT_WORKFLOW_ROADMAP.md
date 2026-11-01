@@ -17,7 +17,7 @@
 | 分析上下文数据流 | K 线按用户区间读取；历史任务按披露日整理基本面、按发布时间整理新闻和巨潮公告，并标注覆盖限制；历史实时估值快照暂不可回溯 |
 | 前端数据接入阶段 | 「开始分析」创建后台任务并订阅 SSE 实时更新；刷新页面会自动恢复上次任务（运行中续订、已完成直接展示），工具栏提供最近任务列表 |
 | 分析师研报 | 行情、基本面、新闻情绪三个分析师均已接入真实模型，共用工具调用运行时（证据引用校验 + JSON 格式纠正） |
-| LangGraph 执行图 | 完整链路：接入 → 三个分析师 → 多空辩论（条件边控制轮次）→ 交易员 → 三类风控 → PM；`/run` 跑全链路，`/market` 只跑行情节点 |
+| LangGraph 执行图 | 完整链路：接入 → 三个分析师 → 多空辩论（条件边控制轮次）→ 交易员 → 三类风控 → PM；统一通过任务接口执行 |
 | 多空辩论 / 交易 / 风控 / PM | 已接入真实模型：Bullish/Bearish 各 3 次发言（发言计数终止）、TradeProposal、三类 RiskReview、PMDecision |
 | 缓存 | 支持进程内 / Redis 两种后端；K 线按 (代码, 周期) 缓存完整序列，图表与分析共用一次取数 |
 | 分析任务 API、真实 SSE | 已实现 `POST /tasks`、`GET /tasks/{id}`、`GET /tasks/{id}/events`（SSE，支持 Last-Event-ID 断线续传）、`POST /tasks/{id}/cancel`；任务表当前在进程内 |
@@ -95,10 +95,10 @@ flowchart LR
 
 **建议接口**
 
-- `POST /api/analysis/tasks`：创建任务并返回任务 ID。
-- `GET /api/analysis/tasks/{task_id}`：查询状态和最终结果。
-- `GET /api/analysis/tasks/{task_id}/events`：订阅任务事件。
-- `POST /api/analysis/tasks/{task_id}/cancel`：请求取消运行中的任务。
+- `POST /api/agent/tasks`：创建任务并返回任务 ID。
+- `GET /api/agent/tasks/{task_id}`：查询状态和最终结果。
+- `GET /api/agent/tasks/{task_id}/events`：订阅任务事件。
+- `POST /api/agent/tasks/{task_id}/cancel`：请求取消运行中的任务。
 
 **验收条件**
 

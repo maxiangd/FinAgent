@@ -10,10 +10,12 @@ FinancialAgent/
 ├─ backend/
 │  ├─ main.py                       # FastAPI 入口（uvicorn main:app）
 │  ├─ config/settings.py            # 统一读取 .env 与环境变量
-│  ├─ app/                          # Web/API 层
-│  │  ├─ routers/                   # analysis_router / market_router / health_router
-│  │  ├─ schemas/                   # 请求与响应模型（analysis_schemas.py）
-│  │  └─ presenters/                # 把 Agent 状态整理成接口响应
+│  ├─ app/                          # Web/应用层
+│  │  ├─ routers/                   # agent_tasks / agent_data_preview / providers / market / paper / health
+│  │  ├─ schemas/                   # 请求与响应模型
+│  │  ├─ presenters/                # 把 Agent 状态整理成接口响应
+│  │  ├─ services/                  # 任务编排（task_manager）与模拟交易（paper_service）
+│  │  └─ exception_handlers.py      # 领域异常 → HTTP 状态码统一映射
 │  ├─ agents/                       # 智能体层
 │  │  ├─ agent_state.py             # LangGraph 共享状态 AgentState
 │  │  ├─ analysis_context_builder.py# 按周期和日期组装分析上下文
@@ -34,7 +36,7 @@ FinancialAgent/
 │  │     ├─ market_analyst/         # 行情与 K 线
 │  │     ├─ fundamental_analyst/    # 财报与估值
 │  │     └─ news_sentiment_analyst/ # 新闻与公告
-│  └─ services/                     # 外部数据源（AKShare / 雪球 / 腾讯 / 巨潮）
+│  └─ data_sources/                 # 外部数据源（AKShare / 雪球 / 腾讯 / 巨潮）
 │     ├─ market/                    # 行情类：图表展示与智能体分析共用
 │     │  ├─ kline_data_service.py   # 日/周/月 K 线
 │     │  ├─ market_snapshot_service.py # 行情快照（价格/市值/财务/行业）
@@ -71,6 +73,8 @@ cmd /c "set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& python -X utf8 -m uvicor
 ```
 
 Uvicorn 日志会追加写入项目根目录的 `.uvicorn.log`。该文件已被 `.gitignore` 忽略，不会作为源码提交。
+
+接口文档在 `http://127.0.0.1:8000/docs`；Swagger UI 的静态资源走 npmmirror，避免 jsdelivr 在部分网络下不可达导致白屏。
 
 前端终端：
 
@@ -125,13 +129,13 @@ MongoDB 不可用时自动回退为仅进程内保存。服务重启后按 `task
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | `/api/analysis/tasks` | 创建分析任务，立即返回 `task_id`，后台执行六阶段链路 |
-| GET | `/api/analysis/tasks?limit=20` | 最近的分析任务（含服务重启前的历史任务） |
-| GET | `/api/analysis/tasks/{task_id}` | 查询任务状态与最终结果 |
-| GET | `/api/analysis/tasks/{task_id}/events` | SSE 事件流（阶段开始/完成、任务完成/失败/取消，支持断线续传） |
-| POST | `/api/analysis/tasks/{task_id}/cancel` | 请求取消运行中的任务 |
-| POST | `/api/analysis/ingest` | 只执行数据接入，用于预览 |
-| POST | `/api/analysis/run` | 同步执行完整链路（脚本/调试用） |
+| POST | `/api/agent/tasks` | 创建分析任务，立即返回 `task_id`，后台执行六阶段链路 |
+| GET | `/api/agent/tasks?limit=20` | 最近的分析任务（含服务重启前的历史任务） |
+| GET | `/api/agent/tasks/{task_id}` | 查询任务状态与最终结果 |
+| GET | `/api/agent/tasks/{task_id}/events` | SSE 事件流（阶段开始/完成、任务完成/失败/取消，支持断线续传） |
+| POST | `/api/agent/tasks/{task_id}/cancel` | 请求取消运行中的任务 |
+| POST | `/api/agent/data-preview` | 只执行数据接入（不调用模型），用于预览与排查数据源 |
+| GET | `/api/providers` | 已配置 API Key 的模型提供商 |
 | GET | `/api/stock/{code}/kline`、`/api/stock/{code}/snapshot`、`/api/search` | 行情数据 |
 | GET | `/api/paper/portfolio` | 模拟账户：现金、持仓市值、浮动与已实现盈亏 |
 | POST | `/api/paper/positions` | 采纳某次已完成任务的 PM 结论建仓 |
@@ -183,7 +187,7 @@ python scripts/run_evaluation.py --limit 4   # 不传 --limit 则跑全部样例
 
 - 按业务领域归类代码：行情相关逻辑放在 `features/market`，分析流程放在 `features/analysis`。
 - Vue 响应式状态和纯计算逻辑使用模块与函数组织；只在需要封装独立状态和行为时引入类。
-- 后端分层：`app/` 放 HTTP 路由、请求模型和响应组装，`agents/` 放智能体与数据流，`services/` 放外部数据源访问，配置统一从 `config/settings.py` 读取。
+- 后端分层：`app/` 放 HTTP 路由、请求模型、响应组装与任务/交易服务，`agents/` 放智能体与数据流，`data_sources/` 放外部数据源访问，配置统一从 `config/settings.py` 读取；领域异常由 `app/exception_handlers.py` 统一映射成 HTTP 状态码。
 
 ## 开发路线
 

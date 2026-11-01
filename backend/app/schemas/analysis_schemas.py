@@ -224,23 +224,6 @@ class LLMProviderOption(BaseModel):
     is_default: bool = False
 
 
-class MarketAnalysisResponse(BaseModel):
-    """真实行情分析师节点的输出和可追溯证据。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    stock_code: str
-    stock_name: str | None = None
-    period: Literal["daily", "weekly", "monthly"]
-    actual_start_date: date
-    actual_end_date: date
-    provider: str
-    model_name: str
-    report: MarketAnalystReport
-    evidence: list[EvidenceItem] = Field(default_factory=list)
-    limitations: list[str] = Field(default_factory=list)
-
-
 class AnalystFinding(BaseModel):
     """单个分析师的结构化结论。"""
 

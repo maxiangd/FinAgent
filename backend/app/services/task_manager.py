@@ -29,7 +29,7 @@ from app.schemas.analysis_schemas import (
     AnalysisTaskRequest,
     TaskStatus,
 )
-from app.task_repository import task_repository
+from app.services.task_repository import task_repository
 
 logger = logging.getLogger("finagent.tasks")
 
@@ -294,16 +294,11 @@ class TaskManager:
         state: dict[str, Any],
     ) -> None:
         """阶段结束时把该阶段结果打包进事件。"""
-        payload: dict[str, Any] = {}
-        try:
-            payload = _stage_payload(stage, record.request, state)
-        except Exception:  # noqa: BLE001
-            logger.warning("阶段结果打包失败：%s", stage, exc_info=True)
         record.add_event(
             AnalysisEventType.STAGE_COMPLETED,
             stage=stage,
             message=f"{STAGE_LABEL[stage]}完成。",
-            payload=payload,
+            payload=_stage_payload(stage, record.request, state),
         )
 
     def _execute(self, record: TaskRecord) -> None:

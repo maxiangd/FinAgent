@@ -13,9 +13,9 @@ from uuid import uuid4
 
 from app.schemas.analysis_schemas import TaskStatus
 from app.schemas.paper_schemas import PaperPortfolio, PaperPosition
-from app.task_manager import task_manager
-from app.task_repository import get_mongo_client, get_mongo_db_name
-from services.market.market_snapshot_service import get_quote
+from app.services.task_manager import task_manager
+from app.services.task_repository import get_mongo_client, get_mongo_db_name
+from data_sources.market.market_snapshot_service import get_quote
 
 logger = logging.getLogger("finagent.paper")
 

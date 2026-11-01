@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Any, Mapping
 
 from app.schemas.analysis_schemas import EvidenceItem
-from services.analysis.news_data_service import get_historical_news
+from data_sources.analysis.news_data_service import get_historical_news
 
 
 def extract_news(snapshot: Mapping[str, Any] | None) -> list[dict[str, Any]]:

@@ -1,4 +1,4 @@
-"""分析任务的创建、状态查询、事件订阅与取消。"""
+"""分析任务的生命周期：创建、状态查询、SSE 事件订阅与取消。"""
 
 from __future__ import annotations
 
@@ -7,16 +7,15 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from agents.llm_provider_client import LLMConfigurationError, UnknownProviderError
 from app.schemas.analysis_schemas import (
     AnalysisTaskRequest,
     AnalysisTaskResponse,
     AnalysisTaskSummary,
     TaskStatus,
 )
-from app.task_manager import FINISHED_STATUSES, TaskRecord, task_manager
+from app.services.task_manager import FINISHED_STATUSES, TaskRecord, task_manager
 
-router = APIRouter(prefix="/api/analysis/tasks", tags=["analysis-tasks"])
+router = APIRouter(prefix="/api/agent/tasks", tags=["agent"])
 
 
 def _to_response(record: TaskRecord) -> AnalysisTaskResponse:
@@ -41,15 +40,7 @@ def _get_or_404(task_id: str) -> TaskRecord:
 @router.post("", response_model=AnalysisTaskResponse, status_code=202)
 async def create_task(request: AnalysisTaskRequest):
     """创建分析任务并在后台执行，立即返回任务 ID。"""
-    try:
-        record = task_manager.create_task(request)
-    except UnknownProviderError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except LLMConfigurationError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return _to_response(record)
+    return _to_response(task_manager.create_task(request))
 
 
 @router.get("", response_model=list[AnalysisTaskSummary])
