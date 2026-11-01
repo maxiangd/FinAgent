@@ -124,5 +124,14 @@ class TaskRepository:
             logger.warning("任务列表读取失败：%s: %s", type(exc).__name__, exc)
             return []
 
+    def delete(self, task_id: str) -> None:
+        collection = self._ensure()
+        if collection is None:
+            return
+        try:
+            collection.delete_one({"task_id": task_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("任务删除失败：%s: %s", type(exc).__name__, exc)
+
 
 task_repository = TaskRepository()

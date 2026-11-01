@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas.analysis_schemas import (
+    AnalysisTaskBatchDeleteRequest,
     AnalysisTaskRequest,
     AnalysisTaskResponse,
     AnalysisTaskSummary,
@@ -52,11 +53,15 @@ async def list_tasks(limit: int = 20):
         created_at = document.get("created_at")
         if created_at is None:
             continue
+        result = document.get("result") or {}
+        pm_decision = result.get("pm_decision") or {}
         summaries.append(
             AnalysisTaskSummary(
                 task_id=document["task_id"],
                 status=TaskStatus(document.get("status", TaskStatus.FAILED.value)),
                 stock_code=str(request.get("stock_code") or ""),
+                stock_name=result.get("stock_name"),
+                pm_action=pm_decision.get("action"),
                 period=request.get("period"),
                 created_at=created_at,
                 updated_at=document.get("updated_at") or created_at,
@@ -69,6 +74,31 @@ async def list_tasks(limit: int = 20):
 async def get_task(task_id: str):
     """查询任务状态与最终结果。"""
     return _to_response(_get_or_404(task_id))
+
+
+@router.post("/batch-delete")
+async def batch_delete_tasks(payload: AnalysisTaskBatchDeleteRequest):
+    """批量删除已结束的任务；执行中或不存在的任务会被跳过。"""
+    deleted: list[str] = []
+    skipped: list[str] = []
+    for task_id in dict.fromkeys(payload.task_ids):
+        record = task_manager.get_task(task_id)
+        if record is None or record.status not in FINISHED_STATUSES:
+            skipped.append(task_id)
+            continue
+        task_manager.delete_task(task_id)
+        deleted.append(task_id)
+    return {"deleted": deleted, "skipped": skipped}
+
+
+@router.delete("/{task_id}")
+async def delete_task(task_id: str):
+    """删除已结束的任务与报告；执行中的任务需先取消。"""
+    record = _get_or_404(task_id)
+    if record.status not in FINISHED_STATUSES:
+        raise HTTPException(status_code=409, detail="任务仍在执行，请先取消后再删除。")
+    task_manager.delete_task(task_id)
+    return {"task_id": task_id, "deleted": True}
 
 
 @router.post("/{task_id}/cancel", response_model=AnalysisTaskResponse)

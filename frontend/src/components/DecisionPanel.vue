@@ -34,6 +34,19 @@
           <b>{{ Math.round((decision.confidence || 0) * 100) }}%</b>
         </div>
       </div>
+      <div v-if="decision.target_price != null || decision.stop_price != null" class="decision-prices">
+        <div class="decision-price">
+          <span class="faint">{{ priceLabels.target }}</span>
+          <b>{{ fmtPrice(decision.target_price) }}</b>
+        </div>
+        <div class="decision-price">
+          <span class="faint">{{ priceLabels.stop }}</span>
+          <b>{{ fmtPrice(decision.stop_price) }}</b>
+        </div>
+      </div>
+      <div v-if="decision.prices_estimated" class="price-note faint">
+        模型未给出有效价位，以上为系统按近期 K 线估算
+      </div>
       <div class="decision-rationale">{{ decision.rationale }}</div>
       <div v-if="decision.key_risks?.length" class="decision-risks">
         <div class="decision-risks-title faint">主要风险</div>
@@ -72,6 +85,12 @@ const actionLabel = computed(() =>
 const decisionTone = computed(
   () => ({ buy: 'up', reduce: 'down', avoid: 'down', hold: 'neutral' })[decision.value?.action] || 'neutral'
 )
+const priceLabels = computed(() =>
+  ['buy', 'hold'].includes(decision.value?.action)
+    ? { target: '目标价', stop: '止损价' }
+    : { target: '回补参考价', stop: '失效价' }
+)
+const fmtPrice = (value) => (value == null ? '-' : `${Number(value).toFixed(2)} 元`)
 const progressColor = computed(() => {
   const p = progress.value
   return p === 100 ? '#22c55e' : p > 40 ? '#d4a72c' : '#4f7cff'
@@ -158,6 +177,28 @@ const progressColor = computed(() => {
 .decision-rationale {
   line-height: 1.8;
   color: var(--text-2);
+}
+.decision-prices {
+  display: flex;
+  gap: 10px;
+}
+.decision-price {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.decision-price b {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.price-note {
+  font-size: 11px;
+  margin-top: -4px;
 }
 .decision-risks ul {
   margin: 6px 0 0;

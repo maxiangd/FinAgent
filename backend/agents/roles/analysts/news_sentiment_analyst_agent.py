@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from agents.roles.analysts.tool_agent_runtime import parse_json_report, run_tool_agent
-from agents.llm_provider_client import LLMSettings, load_llm_settings
+from agents.llm_provider_client import LLMSettings, load_agent_settings, load_llm_settings
 from agents.tools.news_sentiment_analyst.news_data_tools import build_news_tools
 from app.schemas.analysis_schemas import AnalysisStage, AnalystFinding, EvidenceItem
 
@@ -69,7 +69,7 @@ def run_news_sentiment_analyst(
 
 def news_sentiment_analyst_node(state: Mapping[str, Any]) -> dict[str, Any]:
     """LangGraph 可调用的新闻情绪分析节点。"""
-    settings = load_llm_settings(state.get("provider"))
+    settings = load_agent_settings(state, "news_sentiment_analyst")
     finding, model_name, cited_evidence = run_news_sentiment_analyst(state, settings)
     return {
         "news_report": finding,

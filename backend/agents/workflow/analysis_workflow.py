@@ -41,6 +41,7 @@ def _request_from_state(state: dict[str, Any]) -> AnalysisTaskRequest:
         end_date=state.get("requested_end_date"),
         analysis_date=state.get("requested_analysis_date"),
         provider=state.get("provider"),
+        agent_providers=state.get("agent_providers"),
     )
 
 
@@ -127,6 +128,7 @@ def initial_workflow_state(
         requested_start_date=request.start_date,
         requested_end_date=request.end_date,
         provider=request.provider,
+        agent_providers=request.agent_providers,
         current_stage=AnalysisStage.INGEST,
         evidence=[],
         errors=[],

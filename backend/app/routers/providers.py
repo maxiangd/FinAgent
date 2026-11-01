@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from agents.llm_provider_client import available_providers, default_provider_key
-from app.schemas.analysis_schemas import LLMProviderOption
+from agents.llm_provider_client import (
+    agent_catalog,
+    available_providers,
+    default_provider_key,
+)
+from app.schemas.analysis_schemas import LLMProviderAgent, LLMProviderOption
 
 router = APIRouter(prefix="/api", tags=["config"])
 
@@ -18,3 +22,9 @@ async def list_llm_providers():
         LLMProviderOption(**item, is_default=item["key"] == default_key)
         for item in available_providers()
     ]
+
+
+@router.get("/providers/agents", response_model=list[LLMProviderAgent])
+async def list_agent_options():
+    """分析链路中的 Agent 角色，用于按角色分配模型。"""
+    return [LLMProviderAgent(**item) for item in agent_catalog()]

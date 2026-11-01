@@ -60,8 +60,58 @@
         </el-tag>
         <el-input-number v-model="quantity" :min="100" :step="100" :precision="0" size="default" />
         <el-button type="primary" :loading="submitting" @click="openPosition">建仓</el-button>
+        <el-date-picker
+          v-model="backtestDate"
+          type="date"
+          size="default"
+          placeholder="观察截止日"
+          value-format="YYYY-MM-DD"
+          :disabled-date="isDisabledBacktestDate"
+          style="width: 150px"
+        />
+        <el-button :loading="backtesting" @click="runBacktest">收益回测</el-button>
         <span class="faint">股数需为 100 的整数倍</span>
       </div>
+    </div>
+
+    <div v-if="backtest" class="panel table-panel">
+      <div class="table-title">
+        <b>买入后收益回测</b>
+        <span class="faint">
+          {{ backtest.stock_name || backtest.stock_code }} · 买入日 {{ backtest.entry_date }} · 买入价
+          {{ money(backtest.entry_price) }}
+        </span>
+      </div>
+      <div v-if="backtest.note" class="faint backtest-note">{{ backtest.note }}</div>
+      <div v-if="backtest.observation" class="backtest-summary">
+        <span class="faint">
+          买入 {{ backtest.entry_date }}（{{ money(backtest.entry_price) }}）→ 观察
+          {{ backtest.observation.target_date }}（{{ money(backtest.observation.close_price) }}）
+        </span>
+        <b :class="pnlClass(backtest.observation.return_pct)">
+          持有 {{ backtest.observation.trading_days }} 个交易日（{{ backtest.observation.calendar_days }} 天），收益
+          {{ signed(backtest.observation.return_pct) }}%
+        </b>
+      </div>
+      <el-table :data="backtest.points" size="small" style="width: 100%">
+        <el-table-column label="持有期" width="120">
+          <template #default="{ row }">T+{{ row.horizon_days }}</template>
+        </el-table-column>
+        <el-table-column label="目标日期" width="140">
+          <template #default="{ row }">{{ row.target_date || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="收盘价" width="120">
+          <template #default="{ row }">{{ row.close_price == null ? '-' : money(row.close_price) }}</template>
+        </el-table-column>
+        <el-table-column label="收益率">
+          <template #default="{ row }">
+            <span v-if="row.return_pct != null" :class="pnlClass(row.return_pct)">
+              {{ signed(row.return_pct) }}%
+            </span>
+            <span v-else class="faint">数据不足</span>
+          </template>
+        </el-table-column>
+      </el-table>
     </div>
 
     <div class="panel table-panel">
@@ -77,6 +127,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="quantity" label="数量" width="90" />
+        <el-table-column label="持有天数" width="100">
+          <template #default="{ row }">{{ row.holding_days == null ? '-' : `${row.holding_days} 天` }}</template>
+        </el-table-column>
         <el-table-column label="成本价" width="110">
           <template #default="{ row }">{{ money(row.entry_price) }}</template>
         </el-table-column>
@@ -133,6 +186,9 @@
             <span :class="pnlClass(row.realized_pnl)">{{ signed(row.realized_pnl) }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="持有天数" width="100">
+          <template #default="{ row }">{{ row.holding_days == null ? '-' : `${row.holding_days} 天` }}</template>
+        </el-table-column>
         <el-table-column label="平仓时间" min-width="170">
           <template #default="{ row }">{{ formatTime(row.closed_at) }}</template>
         </el-table-column>
@@ -143,11 +199,13 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import { fetchRecentTasks, getAnalysisTask } from '../api/analysis'
 import {
   closePaperPosition,
+  fetchPaperBacktest,
   fetchPaperPortfolio,
   openPaperPosition,
   resetPaperAccount,
@@ -161,6 +219,10 @@ const submitting = ref(false)
 const selectedTask = ref('')
 const selectedPmAction = ref('')
 const quantity = ref(100)
+const backtest = ref(null)
+const backtesting = ref(false)
+const backtestDate = ref('')
+const windowEndDate = ref('')
 
 const completedTasks = computed(() => tasks.value.filter((task) => task.status === 'completed'))
 const periodText = (period) => PERIOD_TEXT[period] || '-'
@@ -173,6 +235,12 @@ const signed = (value) => {
   if (value == null) return '-'
   const number = Number(value)
   return `${number >= 0 ? '+' : ''}${number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+}
+const todayText = () => dayjs().format('YYYY-MM-DD')
+// 观察日不能在未来，也不能早于该任务的分析窗口结束日
+const isDisabledBacktestDate = (value) => {
+  const text = dayjs(value).format('YYYY-MM-DD')
+  return text > todayText() || (!!windowEndDate.value && text < windowEndDate.value)
 }
 
 async function load() {
@@ -190,12 +258,34 @@ async function load() {
 
 async function onSelectTask(taskId) {
   selectedPmAction.value = ''
+  backtest.value = null
+  backtestDate.value = todayText()
+  windowEndDate.value = ''
   if (!taskId) return
   try {
     const task = await getAnalysisTask(taskId)
     selectedPmAction.value = task.result?.pm_decision?.action || ''
+    windowEndDate.value = task.result?.actual_end_date || ''
   } catch {
     /* 详情取不到时不影响建仓，后端会再校验 */
+  }
+}
+
+async function runBacktest() {
+  if (!selectedTask.value) {
+    ElMessage.warning('请先选择一个已完成的分析任务')
+    return
+  }
+  backtesting.value = true
+  try {
+    backtest.value = await fetchPaperBacktest(selectedTask.value, {
+      asOf: backtestDate.value || undefined,
+    })
+  } catch (e) {
+    backtest.value = null
+    ElMessage.error(`回测失败：${e.message}`)
+  } finally {
+    backtesting.value = false
   }
 }
 
@@ -303,5 +393,15 @@ onMounted(load)
   align-items: baseline;
   gap: 10px;
   padding: 6px 8px 10px;
+}
+.backtest-note {
+  padding: 0 8px 8px;
+}
+.backtest-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 0 8px 10px;
 }
 </style>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 import requests
 
@@ -141,6 +142,73 @@ def load_llm_settings(provider: str | None = None) -> LLMSettings:
 
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+# ---------- 按 Agent 角色分配模型 ----------
+AGENT_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("market_analyst", "行情分析师", "analyst"),
+    ("fundamental_analyst", "基本面分析师", "analyst"),
+    ("news_sentiment_analyst", "新闻情绪分析师", "analyst"),
+    ("bull_researcher", "多头研究员", "debate"),
+    ("bear_researcher", "空头研究员", "debate"),
+    ("trader", "交易员", "trader"),
+    ("aggressive_risk", "进攻型风控", "risk"),
+    ("neutral_risk", "中性风控", "risk"),
+    ("conservative_risk", "保守型风控", "risk"),
+    ("portfolio_manager", "PM 决策", "pm"),
+)
+AGENT_KEYS = frozenset(key for key, _, _ in AGENT_SPECS)
+AGENT_STAGE = {key: stage for key, _, stage in AGENT_SPECS}
+STAGE_LABELS = {
+    "analyst": "分析师",
+    "debate": "多空辩论",
+    "trader": "交易提案",
+    "risk": "风控评审",
+    "pm": "最终决策",
+}
+
+
+def agent_env_provider(agent: str) -> str | None:
+    """按「角色 → 阶段」顺序读取环境变量默认提供商，例如 LLM_PROVIDER_TRADER。"""
+    direct = get_env_str(f"LLM_PROVIDER_{agent.upper()}").lower()
+    if direct:
+        return direct
+    stage = AGENT_STAGE.get(agent)
+    if stage:
+        stage_value = get_env_str(f"LLM_PROVIDER_{stage.upper()}").lower()
+        if stage_value:
+            return stage_value
+    return None
+
+
+def agent_catalog() -> list[dict[str, Any]]:
+    """角色列表与默认提供商，供前端按 Agent 分配模型。"""
+    return [
+        {
+            "key": key,
+            "label": label,
+            "stage": stage,
+            "stage_label": STAGE_LABELS[stage],
+            "default_provider": agent_env_provider(key),
+        }
+        for key, label, stage in AGENT_SPECS
+    ]
+
+
+def validate_agent_providers(overrides: Mapping[str, str]) -> None:
+    """提前校验角色 key 与提供商配置，避免任务跑到一半才失败。"""
+    unknown = set(overrides) - AGENT_KEYS
+    if unknown:
+        raise UnknownProviderError(f"未知的 Agent 角色：{', '.join(sorted(unknown))}")
+    for provider in dict.fromkeys(overrides.values()):
+        load_llm_settings(provider)
+
+
+def load_agent_settings(state: Mapping[str, Any], agent: str) -> LLMSettings:
+    """单次调用的模型配置：任务内角色覆盖 > 环境变量默认 > 任务选择的提供商。"""
+    overrides = state.get("agent_providers") or {}
+    provider = overrides.get(agent) or agent_env_provider(agent) or state.get("provider")
+    return load_llm_settings(provider)
 
 
 def _retry_attempts() -> int:

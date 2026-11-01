@@ -14,6 +14,7 @@ from agents.llm_provider_client import (
     LLMConfigurationError,
     UnknownProviderError,
     load_llm_settings,
+    validate_agent_providers,
 )
 from agents.workflow import get_analysis_workflow, initial_workflow_state
 from app.presenters.analysis_response_builder import (
@@ -224,6 +225,7 @@ class TaskManager:
         """校验配置后创建任务，并在后台线程执行。"""
         # 配置错误在创建阶段就返回，避免任务跑一半才失败
         load_llm_settings(request.provider)
+        validate_agent_providers(request.agent_providers or {})
 
         record = TaskRecord(task_id=uuid4().hex, request=request)
         with self._lock:
@@ -273,12 +275,33 @@ class TaskManager:
         """最近的任务文档；Mongo 不可用时退回内存里的任务。"""
         documents = task_repository.list_recent(limit)
         if documents:
-            return documents
+            return [self._normalize_document(document) for document in documents]
         with self._lock:
             records = sorted(
                 self._tasks.values(), key=lambda item: item.created_at, reverse=True
             )[:limit]
         return [_record_document(record) for record in records]
+
+    def _normalize_document(self, document: dict[str, Any]) -> dict[str, Any]:
+        """服务重启前没跑完的任务在列表里显示为中断失败，而不是永远执行中。"""
+        if document.get("status") not in (TaskStatus.QUEUED.value, TaskStatus.RUNNING.value):
+            return document
+        with self._lock:
+            active = document.get("task_id") in self._tasks
+        if active:
+            return document
+        document["status"] = TaskStatus.FAILED.value
+        document["error"] = {
+            "code": "interrupted",
+            "message": "服务重启导致任务中断，请重新发起分析。",
+        }
+        return document
+
+    def delete_task(self, task_id: str) -> None:
+        """删除已结束的任务；调用方需保证任务不在执行中。"""
+        with self._lock:
+            self._tasks.pop(task_id, None)
+        task_repository.delete(task_id)
 
     def cancel_task(self, task_id: str) -> bool:
         record = self.get_task(task_id)

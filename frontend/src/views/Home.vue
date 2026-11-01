@@ -150,24 +150,19 @@
               size="small"
               @change="onDateRangeChange"
             />
-            <el-select
-              v-model="provider"
-              class="provider-select"
-              size="small"
-              placeholder="选择分析模型"
-              :disabled="state.running || !providers.length"
-              :loading="providersLoading"
-            >
-              <el-option
-                v-for="p in providers"
-                :key="p.key"
-                :label="`${p.label} · ${p.model}`"
-                :value="p.key"
-              />
-            </el-select>
             <el-tag v-if="providersLoaded && !providers.length" type="warning" effect="plain" size="small">
               未配置模型 API
             </el-tag>
+            <el-button
+              class="model-assign-btn"
+              size="small"
+              :disabled="state.running || !providers.length"
+              @click="agentDialogOpen = true"
+            >
+              <el-icon class="model-assign-icon"><Operation /></el-icon>
+              <span>模型分配</span>
+              <span v-if="agentOverrideCount" class="model-assign-count">{{ agentOverrideCount }}</span>
+            </el-button>
             <el-button
               class="analysis-start-button"
               type="primary"
@@ -217,22 +212,19 @@
               <span class="stage-label">{{ s.label }}</span>
               <span class="stage-desc faint">{{ s.desc }}</span>
               <el-button
-                v-if="s.key === 'ingest'"
                 text
                 size="small"
-                :icon="ingestExpanded ? Fold : Expand"
-                @click="ingestExpanded = !ingestExpanded"
+                :icon="isStageOpen(s.key) ? Fold : Expand"
+                @click="toggleStage(s.key)"
               >
-                {{ ingestExpanded ? '收起详情' : '展开数据' }}
+                {{ isStageOpen(s.key) ? '收起' : '展开' }}
               </el-button>
               <el-tag type="success" effect="dark" size="small" class="stage-state">完成</el-tag>
             </div>
             <el-collapse-transition>
-              <StageRender
-                v-show="s.key !== 'ingest' || ingestExpanded"
-                :stage-key="s.key"
-                :data="completedData(s)"
-              />
+              <div v-show="isStageOpen(s.key)">
+                <StageRender :stage-key="s.key" :data="completedData(s)" />
+              </div>
             </el-collapse-transition>
           </div>
           <div v-else-if="isCurrent(i)" class="panel stage-section running-section">
@@ -260,6 +252,72 @@
       </div>
     </div>
 
+    <el-dialog v-model="agentDialogOpen" title="按 Agent 分配模型" width="640px">
+      <el-alert
+        class="agent-dialog-tip"
+        type="info"
+        :closable="false"
+        show-icon
+        title="未选择的角色使用默认模型（顶部标签所示）"
+        description="也可以在 .env 里用环境变量设置默认值，例如 LLM_PROVIDER_TRADER=deepseek。"
+      />
+      <div class="agent-bulk">
+        <span class="faint">逐个角色配置比较繁琐时，可以先一键设置：</span>
+        <el-dropdown @command="applyBulkProvider">
+          <el-button size="small">
+            全部设为…<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="__default__">跟随默认模型</el-dropdown-item>
+              <el-dropdown-item v-for="p in providers" :key="p.key" :command="p.key">
+                {{ p.label }} · {{ p.model }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+      <div class="agent-groups">
+        <section v-for="group in agentGroups" :key="group.stage" class="agent-group">
+          <header class="agent-group-head">
+            <span class="agent-group-title">{{ group.label }}</span>
+            <span class="agent-group-line" />
+            <span class="faint agent-group-count">{{ group.agents.length }} 个角色</span>
+          </header>
+          <div class="agent-rows">
+            <div v-for="agent in group.agents" :key="agent.key" class="agent-row">
+              <div class="agent-info">
+                <span class="agent-name">{{ agent.label }}</span>
+                <span class="agent-default faint">
+                  {{ agent.default_provider ? `环境默认 · ${providerLabel(agent.default_provider)}` : '跟随分析模型' }}
+                </span>
+              </div>
+              <el-select
+                v-model="agentProviders[agent.key]"
+                class="agent-select"
+                size="small"
+                clearable
+                placeholder="跟随分析模型"
+              >
+                <el-option
+                  v-for="p in providers"
+                  :key="p.key"
+                  :label="`${p.label} · ${p.model}`"
+                  :value="p.key"
+                />
+              </el-select>
+            </div>
+          </div>
+        </section>
+      </div>
+      <template #footer>
+        <div class="agent-footer">
+          <el-button text @click="clearAgentProviders">全部跟随分析模型</el-button>
+          <el-button type="primary" @click="agentDialogOpen = false">完成</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
     <el-drawer v-model="historyOpen" title="历史任务" size="420px" direction="rtl">
       <div v-loading="historyLoading" class="history-list">
         <div
@@ -286,9 +344,9 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search, Clock } from '@element-plus/icons-vue'
+import { VideoPlay, VideoPause, Refresh, Fold, Expand, Search, Clock, Operation, ArrowDown } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
 import {
   state,
@@ -302,7 +360,7 @@ import {
   chartPrefs,
 } from '../features/analysis/pipeline'
 import { fetchKline, loadStock, searchStock } from '../api/market'
-import { fetchLLMProviders, fetchRecentTasks, getAnalysisTask } from '../api/analysis'
+import { fetchAgentOptions, fetchLLMProviders, fetchRecentTasks, getAnalysisTask } from '../api/analysis'
 import { showApiError } from '../api/http'
 import StageProgress from '../components/StageProgress.vue'
 import StageRender from '../components/StageRender.vue'
@@ -316,21 +374,43 @@ const searching = ref(false)
 const loading = ref(false)
 let searchTimer = null
 const chartOpen = ref(true)
-const ingestExpanded = ref(false)
+const stageOpen = reactive({})
+const isStageOpen = (key) => stageOpen[key] !== false
+const toggleStage = (key) => {
+  stageOpen[key] = !isStageOpen(key)
+}
 const kPeriod = ref('日K')
 const periodOptions = ['日K', '周K', '月K']
 const apiPeriod = { 日K: 'daily', 周K: 'weekly', 月K: 'monthly' }
 const indicator = ref('macd')
 const kCount = ref(0)
 const providers = ref([])
-const providersLoading = ref(false)
 const providersLoaded = ref(false)
 const provider = ref('')
+const agentOptions = ref([])
+const agentProviders = reactive({})
+const agentDialogOpen = ref(false)
+const agentOverrideCount = computed(
+  () => Object.values(agentProviders).filter(Boolean).length
+)
+const agentGroups = computed(() => {
+  const groups = []
+  for (const item of agentOptions.value) {
+    let group = groups.find((g) => g.stage === item.stage)
+    if (!group) {
+      group = { stage: item.stage, label: item.stage_label, agents: [] }
+      groups.push(group)
+    }
+    group.agents.push(item)
+  }
+  return groups
+})
 const providerTagText = computed(() => {
   if (!providersLoaded.value) return '模型配置加载中…'
   if (!providers.value.length) return '模型 API 未配置'
-  const current = providers.value.find((p) => p.key === provider.value)
-  return current ? `行情分析师 · ${current.label}` : '行情分析师已接入'
+  const base = providers.value.find((p) => p.is_default) || providers.value[0]
+  const count = agentOverrideCount.value
+  return count ? `默认 ${base.label} · ${count} 个角色单独指定` : `默认模型 · ${base.label}`
 })
 const selected = computed(() => state.selected)
 const chartBars = ref(null)
@@ -612,7 +692,7 @@ async function onPickFirst() {
 }
 
 function start() {
-  ingestExpanded.value = false
+  Object.keys(stageOpen).forEach((key) => delete stageOpen[key])
   const range = chartDateRange.value
   const request = {
     stock_code: selected.value.code,
@@ -623,19 +703,22 @@ function start() {
     request.end_date = range[1]
   }
   if (provider.value) request.provider = provider.value
+  const overrides = Object.fromEntries(
+    Object.entries(agentProviders).filter(([, value]) => value)
+  )
+  if (Object.keys(overrides).length) request.agent_providers = overrides
   startAnalysis(request)
 }
 function stop() {
   stopAnalysis()
 }
 function reset() {
-  ingestExpanded.value = false
+  Object.keys(stageOpen).forEach((key) => delete stageOpen[key])
   if (state.selected) selectStock(state.selected)
 }
 
 // 拉取已配置 API Key 的模型提供商，默认选中后端标记的默认项
 async function loadProviders() {
-  providersLoading.value = true
   try {
     const list = await fetchLLMProviders()
     providers.value = list
@@ -644,9 +727,34 @@ async function loadProviders() {
   } catch {
     providers.value = []
   } finally {
-    providersLoading.value = false
     providersLoaded.value = true
   }
+}
+
+async function loadAgentOptions() {
+  try {
+    agentOptions.value = await fetchAgentOptions()
+  } catch {
+    agentOptions.value = []
+  }
+}
+
+function applyBulkProvider(providerKey) {
+  const value = providerKey === '__default__' ? '' : providerKey
+  agentOptions.value.forEach((agent) => {
+    agentProviders[agent.key] = value
+  })
+}
+
+function clearAgentProviders() {
+  Object.keys(agentProviders).forEach((key) => {
+    agentProviders[key] = ''
+  })
+}
+
+const providerLabel = (key) => {
+  const found = providers.value.find((p) => p.key === key)
+  return found ? found.label : key
 }
 
 const historyOpen = ref(false)
@@ -727,6 +835,7 @@ async function restoreSavedTask() {
 
 onMounted(() => {
   loadProviders()
+  loadAgentOptions()
   restoreSavedTask()
 })
 </script>
@@ -891,8 +1000,48 @@ onMounted(() => {
   gap: 14px;
   margin-left: 8px;
 }
-.provider-select {
-  width: 230px;
+.model-assign-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(79, 124, 255, 0.4);
+  background: rgba(79, 124, 255, 0.1);
+  color: var(--accent);
+  font-weight: 600;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.model-assign-btn:hover,
+.model-assign-btn:focus {
+  border-color: rgba(79, 124, 255, 0.7);
+  background: rgba(79, 124, 255, 0.18);
+  color: var(--accent);
+}
+.model-assign-btn.is-disabled,
+.model-assign-btn.is-disabled:hover {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-3);
+  opacity: 1;
+}
+.model-assign-btn :deep(> span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.model-assign-icon {
+  font-size: 14px;
+}
+.model-assign-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
 }
 .analysis-range-panel :deep(.analysis-date-range-picker.el-date-editor) {
   width: 370px;
@@ -1148,5 +1297,86 @@ onMounted(() => {
 }
 .history-time {
   font-size: 12px;
+}
+.agent-dialog-tip {
+  margin-bottom: 12px;
+}
+.agent-bulk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+.agent-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.agent-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.agent-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.agent-group-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.agent-group-count {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agent-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.agent-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.agent-info {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-default {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.agent-select {
+  width: 100%;
+}
+.agent-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 </style>

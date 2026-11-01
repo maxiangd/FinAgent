@@ -15,20 +15,16 @@
           <span>投研工作台</span>
         </router-link>
         <router-link
-          to="/reports"
+          to="/history"
           class="nav-item"
-          :class="{ active: route.path.startsWith('/reports') }"
+          :class="{ active: route.path.startsWith('/history') || route.path.startsWith('/reports') }"
         >
-          <el-icon><Document /></el-icon>
-          <span>研究报告</span>
+          <el-icon><Clock /></el-icon>
+          <span>任务与报告</span>
         </router-link>
         <router-link to="/paper" class="nav-item" :class="{ active: route.path === '/paper' }">
           <el-icon><Coin /></el-icon>
           <span>模拟交易</span>
-        </router-link>
-        <router-link to="/history" class="nav-item" :class="{ active: route.path === '/history' }">
-          <el-icon><Clock /></el-icon>
-          <span>历史任务</span>
         </router-link>
       </nav>
       <div class="sidebar-foot faint">
@@ -62,7 +58,7 @@
 
 <script setup>
 import { useRoute } from 'vue-router'
-import { Monitor, Document, Coin, Clock, ArrowRight } from '@element-plus/icons-vue'
+import { Monitor, Coin, Clock, ArrowRight } from '@element-plus/icons-vue'
 
 const route = useRoute()
 </script>

@@ -62,6 +62,7 @@ def test_open_position_updates_cash_and_portfolio(monkeypatch):
     assert portfolio.market_value == pytest.approx(10_000)
     assert portfolio.total_assets == pytest.approx(1_000_000)
     assert len(portfolio.positions) == 1
+    assert portfolio.positions[0].holding_days == 0
 
 
 def test_insufficient_cash_rejected(monkeypatch):

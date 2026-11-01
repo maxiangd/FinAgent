@@ -10,6 +10,7 @@
           {{ ACTION_TEXT[pmDecision.action] || pmDecision.action }} · 置信度
           {{ Math.round((pmDecision.confidence || 0) * 100) }}%
         </el-tag>
+        <el-button v-if="task" size="small" type="danger" :icon="Delete" @click="remove">删除报告</el-button>
         <el-button size="small" :icon="ArrowLeft" @click="goBack">返回</el-button>
       </div>
     </div>
@@ -31,10 +32,10 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowLeft, Delete } from '@element-plus/icons-vue'
 import { STAGES } from '../features/analysis/content'
-import { getAnalysisTask } from '../api/analysis'
+import { deleteAnalysisTask, getAnalysisTask } from '../api/analysis'
 import {
   ACTION_TEXT,
   PERIOD_TEXT,
@@ -96,7 +97,26 @@ async function load() {
 
 function goBack() {
   if (window.history.length > 1) router.back()
-  else router.push('/reports')
+  else router.push('/history')
+}
+
+async function remove() {
+  try {
+    await ElMessageBox.confirm(
+      '删除后该任务的报告与记录都会移除，且不可恢复。确定删除吗？',
+      '删除报告',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await deleteAnalysisTask(route.params.taskId)
+    ElMessage.success('报告已删除')
+    router.push('/history')
+  } catch (e) {
+    ElMessage.error(`删除失败：${e.message}`)
+  }
 }
 
 onMounted(load)

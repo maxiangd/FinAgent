@@ -27,10 +27,29 @@ export async function cancelAnalysisTask(taskId) {
   return request(`/api/agent/tasks/${taskId}/cancel`, { method: 'POST' })
 }
 
+// 删除已结束的任务及其报告
+export async function deleteAnalysisTask(taskId) {
+  return request(`/api/agent/tasks/${taskId}`, { method: 'DELETE' })
+}
+
+// 批量删除已结束的任务；返回 { deleted: [...], skipped: [...] }
+export async function deleteAnalysisTasks(taskIds) {
+  return request('/api/agent/tasks/batch-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_ids: taskIds }),
+  })
+}
+
 // SSE 事件流地址（EventSource 直接用）
 export const analysisTaskEventsUrl = (taskId) => `/api/agent/tasks/${taskId}/events`
 
 // 已配置 API Key 的模型提供商；key 用于随分析请求提交
 export async function fetchLLMProviders() {
   return request('/api/providers')
+}
+
+// 分析链路中的 Agent 角色，用于按角色分配模型
+export async function fetchAgentOptions() {
+  return request('/api/providers/agents')
 }

@@ -108,8 +108,6 @@ def build_ingestion_response(request: AnalysisTaskRequest, state: dict) -> DataI
     )
     news_note = f"媒体新闻 {media_count} 条 · 巨潮公司公告 {announcement_count} 条"
     news_limitations = news.get("limitations") or []
-    if news_limitations:
-        news_note += " · 覆盖范围见下方说明"
     items.append(
         DataIngestionItem(
             name="新闻与公司公告",

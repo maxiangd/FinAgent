@@ -7,14 +7,21 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from app.schemas.analysis_schemas import TaskStatus
-from app.schemas.paper_schemas import PaperPortfolio, PaperPosition
+from app.schemas.paper_schemas import (
+    PaperBacktest,
+    PaperBacktestObservation,
+    PaperBacktestPoint,
+    PaperPortfolio,
+    PaperPosition,
+)
 from app.services.task_manager import task_manager
 from app.services.task_repository import get_mongo_client, get_mongo_db_name
+from data_sources.market.kline_data_service import get_kline
 from data_sources.market.market_snapshot_service import get_quote
 
 logger = logging.getLogger("finagent.paper")
@@ -24,9 +31,35 @@ ACCOUNT_COLLECTION = "paper_account"
 POSITION_COLLECTION = "paper_positions"
 ACCOUNT_ID = "default"
 
+# 回测默认持有期（交易日）
+DEFAULT_BACKTEST_HORIZONS = (1, 5, 10, 20)
+MAX_BACKTEST_HORIZON = 250
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Mongo 读出来的时间是 naive UTC，统一补上时区再参与计算。"""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _holding_days(opened_at: datetime, closed_at: datetime | None = None) -> int:
+    end = _as_utc(closed_at) if closed_at else _now()
+    return max((end - _as_utc(opened_at)).days, 0)
+
+
+def _normalize_horizons(horizons: list[int] | None) -> list[int]:
+    if not horizons:
+        return list(DEFAULT_BACKTEST_HORIZONS)
+    try:
+        cleaned = sorted({int(item) for item in horizons})
+    except (TypeError, ValueError) as exc:
+        raise ValueError("持有期必须是交易日数，例如 1,5,10,20") from exc
+    if not cleaned or cleaned[0] < 1 or cleaned[-1] > MAX_BACKTEST_HORIZON:
+        raise ValueError(f"持有期必须在 1 到 {MAX_BACKTEST_HORIZON} 个交易日之间")
+    return cleaned
 
 
 class PaperService:
@@ -178,6 +211,113 @@ class PaperService:
         self._save_position(document)
         return self._to_model(document)
 
+    def backtest_task(
+        self,
+        task_id: str,
+        horizons: list[int] | None = None,
+        as_of: date | None = None,
+    ) -> PaperBacktest:
+        """分析窗口结束日买入，统计到观察日（默认今天）的涨幅与固定持有期收益。"""
+        horizons = _normalize_horizons(horizons)
+        task = task_manager.get_task(task_id)
+        if task is None:
+            raise LookupError(f"任务不存在：{task_id}")
+        if task.status != TaskStatus.COMPLETED or task.result is None:
+            raise ValueError("只能回测已完成的分析任务")
+
+        result = task.result
+        entry_date = result.actual_end_date
+        if as_of is None:
+            as_of = date.today()
+        elif as_of > date.today():
+            raise ValueError("观察日不能晚于今天")
+        if as_of < entry_date:
+            raise ValueError(f"观察日不能早于分析窗口结束日 {entry_date}")
+
+        try:
+            kline = get_kline(
+                result.stock_code,
+                period="daily",
+                start_date=entry_date - timedelta(days=15),
+                end_date=date.today(),
+            )
+        except LookupError as exc:
+            raise LookupError(f"{result.stock_code} 缺少回测所需行情：{exc}") from exc
+
+        dates: list[str] = kline["dates"]
+        items: list[dict[str, Any]] = kline["items"]
+
+        def last_bar_on_or_before(target: date) -> int | None:
+            return next(
+                (
+                    index
+                    for index in range(len(dates) - 1, -1, -1)
+                    if dates[index] <= target.isoformat()
+                    and items[index].get("close") is not None
+                ),
+                None,
+            )
+
+        start_index = last_bar_on_or_before(entry_date)
+        if start_index is None:
+            raise LookupError(f"{result.stock_code} 在 {entry_date} 之前没有可用行情")
+
+        actual_entry_date = date.fromisoformat(dates[start_index])
+        entry_price = float(items[start_index]["close"])
+        notes: list[str] = []
+        if actual_entry_date != entry_date:
+            notes.append(
+                f"分析窗口结束日 {entry_date} 无交易行情，按之前最近交易日 {actual_entry_date} 收盘价买入"
+            )
+
+        observation = None
+        observation_index = last_bar_on_or_before(as_of)
+        if observation_index is not None and observation_index >= start_index:
+            observation_date = date.fromisoformat(dates[observation_index])
+            observation_close = float(items[observation_index]["close"])
+            observation = PaperBacktestObservation(
+                target_date=observation_date,
+                close_price=observation_close,
+                trading_days=observation_index - start_index,
+                calendar_days=(observation_date - actual_entry_date).days,
+                return_pct=round(
+                    (observation_close - entry_price) / entry_price * 100, 2
+                ),
+            )
+            if observation_date != as_of:
+                notes.append(f"观察日 {as_of} 无交易行情，按最近交易日 {observation_date} 计算")
+
+        points: list[PaperBacktestPoint] = []
+        for horizon in horizons:
+            target_index = start_index + horizon
+            target_close = (
+                items[target_index].get("close") if target_index < len(items) else None
+            )
+            if target_close is None:
+                points.append(PaperBacktestPoint(horizon_days=horizon))
+                continue
+            points.append(
+                PaperBacktestPoint(
+                    horizon_days=horizon,
+                    target_date=date.fromisoformat(dates[target_index]),
+                    close_price=float(target_close),
+                    return_pct=round(
+                        (float(target_close) - entry_price) / entry_price * 100, 2
+                    ),
+                )
+            )
+
+        return PaperBacktest(
+            task_id=task_id,
+            stock_code=result.stock_code,
+            stock_name=result.stock_name,
+            entry_date=actual_entry_date,
+            entry_price=entry_price,
+            observation=observation,
+            points=points,
+            note="；".join(notes) or None,
+        )
+
     def get_portfolio(self) -> PaperPortfolio:
         account = self._load_account()
         open_positions = []
@@ -265,6 +405,9 @@ class PaperService:
             status=document.get("status", "open"),
             pm_action=document.get("pm_action"),
             opened_at=document["opened_at"],
+            holding_days=_holding_days(
+                document["opened_at"], document.get("closed_at")
+            ),
             closed_at=document.get("closed_at"),
             close_price=document.get("close_price"),
             realized_pnl=document.get("realized_pnl"),

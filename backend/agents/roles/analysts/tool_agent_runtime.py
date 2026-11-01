@@ -101,9 +101,16 @@ def validate_report(payload: dict[str, Any], model_cls: type[ReportT]) -> Report
         ) from exc
 
 
-def parse_json_report(content: Any, model_cls: type[ReportT]) -> ReportT:
-    """把模型输出解析并校验成指定的报告模型。"""
-    return validate_report(parse_json_payload(content), model_cls)
+def parse_json_report(
+    content: Any,
+    model_cls: type[ReportT],
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> ReportT:
+    """把模型输出解析成 JSON，可选做字段规范化，再校验成报告模型。"""
+    payload = parse_json_payload(content)
+    if normalize is not None:
+        payload = normalize(payload)
+    return validate_report(payload, model_cls)
 
 
 def run_structured_completion(
@@ -112,6 +119,7 @@ def run_structured_completion(
     system_prompt: str,
     payload: dict[str, Any],
     model_cls: type[ReportT],
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     max_repairs: int = 2,
 ) -> ReportT:
     """单次结构化调用：不使用工具，要求模型直接返回约定的 JSON。"""
@@ -123,7 +131,7 @@ def run_structured_completion(
     while True:
         choice = request_chat_completion(settings, messages, [], "auto")
         try:
-            return parse_json_report(choice.get("content"), model_cls)
+            return parse_json_report(choice.get("content"), model_cls, normalize)
         except LLMCallError as exc:
             if repairs >= max_repairs:
                 raise

@@ -9,7 +9,7 @@ from agents.roles.analysts.tool_agent_runtime import (
     run_tool_agent,
     validate_report,
 )
-from agents.llm_provider_client import LLMSettings, load_llm_settings
+from agents.llm_provider_client import LLMSettings, load_agent_settings, load_llm_settings
 from agents.tools.market_analyst.market_data_tools import build_market_tools
 from app.schemas.analysis_schemas import AnalysisStage, EvidenceItem, MarketAnalystReport
 
@@ -96,7 +96,7 @@ def run_market_analyst(
 
 def market_analyst_node(state: Mapping[str, Any]) -> dict[str, Any]:
     """LangGraph 可调用的行情分析节点，返回结构化结论和引用证据。"""
-    settings = load_llm_settings(state.get("provider"))
+    settings = load_agent_settings(state, "market_analyst")
     report, model_name, cited_evidence = run_market_analyst(state, settings)
     return {
         "market_report": report,

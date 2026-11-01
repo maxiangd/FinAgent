@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from agents.roles.analysts.tool_agent_runtime import run_structured_completion
-from agents.llm_provider_client import load_llm_settings
+from agents.llm_provider_client import load_agent_settings
 from agents.research_context import (
     allowed_evidence_ids,
     build_analysis_summary,
@@ -33,7 +33,7 @@ _ROLE_PROMPTS = {
 
 def _run_researcher(state: Mapping[str, Any], role: str) -> dict[str, Any]:
     """执行一次研究员发言，并把发言追加进辩论状态。"""
-    settings = load_llm_settings(state.get("provider"))
+    settings = load_agent_settings(state, f"{role}_researcher")
     debate = dict(state.get("investment_debate_state") or {})
     history = list(debate.get("history") or [])
     round_number = len(history) // 2 + 1

@@ -60,6 +60,7 @@ class AgentState(MessagesState, total=False):
     sender: str
     current_stage: AnalysisStage
     provider: str | None
+    agent_providers: dict[str, str] | None
     market_snapshot: dict[str, Any]
     fundamentals_data: dict[str, Any]
     news_data: dict[str, Any]

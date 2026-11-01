@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
 
 from fastapi import APIRouter
 
-from app.schemas.paper_schemas import PaperPortfolio, PaperPosition, PaperPositionCreate
+from app.schemas.paper_schemas import (
+    PaperBacktest,
+    PaperPortfolio,
+    PaperPosition,
+    PaperPositionCreate,
+)
 from app.services.paper_service import paper_service
 
 router = APIRouter(prefix="/api/paper", tags=["paper"])
@@ -30,6 +36,22 @@ async def open_position(payload: PaperPositionCreate):
 async def close_position(position_id: str):
     """按最新价平仓，并把盈亏计入已实现收益。"""
     return await asyncio.to_thread(paper_service.close_position, position_id)
+
+
+@router.get("/backtest/{task_id}", response_model=PaperBacktest)
+async def backtest_task(
+    task_id: str,
+    horizons: str = "1,5,10,20",
+    as_of: date | None = None,
+):
+    """分析窗口结束日买入，统计到观察日（as_of，默认今天）的涨幅与固定持有期收益。"""
+    try:
+        values = [int(part) for part in horizons.split(",") if part.strip()]
+    except ValueError as exc:
+        raise ValueError("horizons 必须是逗号分隔的交易日数，例如 1,5,10,20") from exc
+    return await asyncio.to_thread(
+        paper_service.backtest_task, task_id, values, as_of
+    )
 
 
 @router.post("/reset", response_model=PaperPortfolio)

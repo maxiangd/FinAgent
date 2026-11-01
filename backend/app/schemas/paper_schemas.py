@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,6 +35,7 @@ class PaperPosition(BaseModel):
     status: Literal["open", "closed"] = "open"
     pm_action: str | None = None
     opened_at: datetime
+    holding_days: int | None = None
     closed_at: datetime | None = None
     close_price: float | None = None
     realized_pnl: float | None = None
@@ -54,3 +55,41 @@ class PaperPortfolio(BaseModel):
     total_pnl: float
     positions: list[PaperPosition] = Field(default_factory=list)
     closed_positions: list[PaperPosition] = Field(default_factory=list)
+
+
+class PaperBacktestPoint(BaseModel):
+    """买入后第 N 个交易日的收盘表现；行情不足时价格与收益为空。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    horizon_days: int
+    target_date: date | None = None
+    close_price: float | None = None
+    return_pct: float | None = None
+
+
+class PaperBacktestObservation(BaseModel):
+    """分析窗口结束日至观察日的收盘涨幅。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_date: date
+    close_price: float
+    trading_days: int
+    calendar_days: int
+    return_pct: float
+
+
+class PaperBacktest(BaseModel):
+    """以分析窗口结束日收盘价买入后的观察期与固定持有期收益。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    stock_code: str
+    stock_name: str | None = None
+    entry_date: date
+    entry_price: float
+    observation: PaperBacktestObservation | None = None
+    points: list[PaperBacktestPoint] = Field(default_factory=list)
+    note: str | None = None

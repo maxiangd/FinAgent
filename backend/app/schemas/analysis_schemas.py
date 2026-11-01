@@ -82,6 +82,21 @@ class AnalysisTaskRequest(BaseModel):
         max_length=32,
         description="模型提供商 key（zhipu / deepseek / qwen）；不传时使用默认提供商",
     )
+    agent_providers: dict[str, str] | None = Field(
+        default=None,
+        description="按 Agent 角色覆盖模型提供商，键为角色 key（如 trader、portfolio_manager）",
+    )
+
+    @model_validator(mode="after")
+    def validate_agent_provider_keys(self):
+        """只校验角色名，提供商是否可用留给创建任务时检查，避免历史任务因换 key 无法读取。"""
+        if self.agent_providers:
+            from agents.llm_provider_client import AGENT_KEYS
+
+            unknown = set(self.agent_providers) - AGENT_KEYS
+            if unknown:
+                raise ValueError(f"未知的 Agent 角色：{', '.join(sorted(unknown))}")
+        return self
 
     @model_validator(mode="after")
     def validate_analysis_dates(self):
@@ -224,6 +239,18 @@ class LLMProviderOption(BaseModel):
     is_default: bool = False
 
 
+class LLMProviderAgent(BaseModel):
+    """分析链路中的一个 Agent 角色，用于按角色分配模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    stage: str
+    stage_label: str
+    default_provider: str | None = None
+
+
 class AnalystFinding(BaseModel):
     """单个分析师的结构化结论。"""
 
@@ -258,6 +285,7 @@ class TradeProposal(BaseModel):
     entry_price: float | None = Field(default=None, gt=0)
     target_price: float | None = Field(default=None, gt=0)
     stop_price: float | None = Field(default=None, gt=0)
+    prices_estimated: bool = Field(default=False, description="价位由系统按近期 K 线估算")
     evidence_ids: list[str] = Field(default_factory=list)
 
 
@@ -281,6 +309,9 @@ class PMDecision(BaseModel):
     action: Literal["buy", "hold", "reduce", "avoid"]
     rationale: str
     confidence: float = Field(ge=0, le=1)
+    target_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    prices_estimated: bool = Field(default=False, description="价位由系统按近期 K 线估算")
     key_risks: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
 
@@ -360,6 +391,16 @@ class AnalysisTaskSummary(BaseModel):
     task_id: str
     status: TaskStatus
     stock_code: str
+    stock_name: str | None = None
+    pm_action: str | None = None
     period: Literal["daily", "weekly", "monthly"] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AnalysisTaskBatchDeleteRequest(BaseModel):
+    """批量删除任务请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_ids: list[str] = Field(min_length=1, max_length=200)
