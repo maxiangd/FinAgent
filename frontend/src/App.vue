@@ -10,25 +10,26 @@
         </div>
       </div>
       <nav class="nav">
-        <div class="nav-item active">
+        <router-link to="/" class="nav-item" :class="{ active: route.path === '/' }">
           <el-icon><Monitor /></el-icon>
           <span>投研工作台</span>
-        </div>
-        <div class="nav-item disabled">
+        </router-link>
+        <router-link
+          to="/reports"
+          class="nav-item"
+          :class="{ active: route.path.startsWith('/reports') }"
+        >
           <el-icon><Document /></el-icon>
           <span>研究报告</span>
-          <el-tag size="small" type="info" effect="plain">规划中</el-tag>
-        </div>
-        <div class="nav-item disabled">
+        </router-link>
+        <router-link to="/paper" class="nav-item" :class="{ active: route.path === '/paper' }">
           <el-icon><Coin /></el-icon>
           <span>模拟交易</span>
-          <el-tag size="small" type="info" effect="plain">规划中</el-tag>
-        </div>
-        <div class="nav-item disabled">
+        </router-link>
+        <router-link to="/history" class="nav-item" :class="{ active: route.path === '/history' }">
           <el-icon><Clock /></el-icon>
           <span>历史任务</span>
-          <el-tag size="small" type="info" effect="plain">规划中</el-tag>
-        </div>
+        </router-link>
       </nav>
       <div class="sidebar-foot faint">
         <div class="pipeline-mini">
@@ -46,7 +47,7 @@
     <div class="main">
       <div class="topbar">
         <div class="crumb">
-          <span class="faint">工作台</span>
+          <span class="faint">{{ route.meta.title || '工作台' }}</span>
           <el-icon class="faint" :size="12"><ArrowRight /></el-icon>
           <span>A 股多智能体投研分析</span>
         </div>
@@ -60,7 +61,10 @@
 </template>
 
 <script setup>
+import { useRoute } from 'vue-router'
 import { Monitor, Document, Coin, Clock, ArrowRight } from '@element-plus/icons-vue'
+
+const route = useRoute()
 </script>
 
 <style scoped>
@@ -122,6 +126,7 @@ import { Monitor, Document, Coin, Clock, ArrowRight } from '@element-plus/icons-
   color: var(--text-2);
   font-size: 13.5px;
   transition: all 0.15s;
+  text-decoration: none;
 }
 .nav-item .el-tag {
   margin-left: auto;

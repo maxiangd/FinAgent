@@ -19,6 +19,40 @@ def _mask_url(url: str) -> str:
     return re.sub(r"//[^@/]+@", "//***@", url)
 
 
+_mongo_client = None
+_mongo_checked = False
+_mongo_lock = threading.Lock()
+
+
+def get_mongo_client():
+    """返回已连接的 MongoClient；不可用时返回 None（只尝试一次）。"""
+    global _mongo_client, _mongo_checked
+    if _mongo_checked:
+        return _mongo_client
+    with _mongo_lock:
+        if _mongo_checked:
+            return _mongo_client
+        _mongo_checked = True
+        url = get_env_str("MONGO_URL", "mongodb://127.0.0.1:27017")
+        try:
+            from pymongo import MongoClient
+
+            client = MongoClient(url, serverSelectionTimeoutMS=1500)
+            client.admin.command("ping")
+            _mongo_client = client
+            logger.info("MongoDB 已连接（%s）", _mask_url(url))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MongoDB 不可用（%s），任务与模拟交易只保存在进程内", type(exc).__name__
+            )
+            _mongo_client = None
+        return _mongo_client
+
+
+def get_mongo_db_name() -> str:
+    return get_env_str("MONGO_DB", "finagent")
+
+
 class TaskRepository:
     """把任务文档写入 MongoDB，供服务重启后查询。"""
 
@@ -35,22 +69,19 @@ class TaskRepository:
             if self._checked:
                 return self._collection
             self._checked = True
-            url = get_env_str("MONGO_URL", "mongodb://127.0.0.1:27017")
-            db_name = get_env_str("MONGO_DB", "finagent")
+            client = get_mongo_client()
+            if client is None:
+                self._collection = None
+                return None
             try:
-                from pymongo import ASCENDING, MongoClient
+                from pymongo import ASCENDING
 
-                client = MongoClient(url, serverSelectionTimeoutMS=1500)
-                client.admin.command("ping")
-                collection = client[db_name][_COLLECTION]
+                collection = client[get_mongo_db_name()][_COLLECTION]
                 collection.create_index([("task_id", ASCENDING)], unique=True)
                 collection.create_index([("created_at", ASCENDING)])
                 self._collection = collection
-                logger.info("任务持久化：MongoDB（%s/%s）", _mask_url(url), db_name)
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "MongoDB 不可用（%s），任务只保存在进程内", type(exc).__name__
-                )
+                logger.warning("任务集合初始化失败：%s", exc)
                 self._collection = None
             return self._collection
 

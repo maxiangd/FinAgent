@@ -80,3 +80,51 @@ html.dark {
   --el-text-color-regular: #c3cbe0;
   --el-text-color-secondary: #9aa5bd;
 }
+/* ---------- 独立页面（历史任务 / 研究报告） ---------- */
+.page {
+  width: 100%;
+  max-width: 1760px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 20px clamp(16px, 2vw, 32px) 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.page-head {
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.page-title {
+  font-size: 16px;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.table-panel {
+  padding: 8px;
+}
+.report-section {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.detail-placeholder {
+  padding: 28px;
+  text-align: center;
+}

@@ -133,6 +133,22 @@ MongoDB 不可用时自动回退为仅进程内保存。服务重启后按 `task
 | POST | `/api/analysis/ingest` | 只执行数据接入，用于预览 |
 | POST | `/api/analysis/run` | 同步执行完整链路（脚本/调试用） |
 | GET | `/api/stock/{code}/kline`、`/api/stock/{code}/snapshot`、`/api/search` | 行情数据 |
+| GET | `/api/paper/portfolio` | 模拟账户：现金、持仓市值、浮动与已实现盈亏 |
+| POST | `/api/paper/positions` | 采纳某次已完成任务的 PM 结论建仓 |
+| POST | `/api/paper/positions/{id}/close` | 按最新价平仓 |
+| POST | `/api/paper/reset` | 清空持仓并恢复初始资金（演示用） |
+
+## 测试
+
+后端单元测试不依赖外部服务（缓存单飞与 TTL、K 线缓存切片、模拟交易规则、下游输入整理）：
+
+```bash
+cd backend
+python -m pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
+
+当前 16 个用例，约 1.5 秒跑完。
 
 ## 评测
 
@@ -161,6 +177,7 @@ python scripts/run_evaluation.py --limit 4   # 不传 --limit 则跑全部样例
 - 行情搜索、快照和日 K 线由 FastAPI 后端通过 AKShare 获取；周/月 K 线取自雪球接口（东财行情接口在部分网络下不可达），腾讯接口作为兜底。
 - 六阶段链路已由 LangGraph 工作流真实执行：数据接入 → 三个分析师 → 多空辩论（3 轮）→ 交易提案 → 三类风控 → PM 决策，全部调用所选大模型；页面点「开始分析」会创建后台任务，通过 SSE 实时更新阶段进度，完成后展示各阶段结果（约 1-2 分钟）。交易提案仅作研究结果，不接入真实下单。
 - 页面展示仅供学习和演示，不构成投资建议。
+- 前端有四个可用页面：投研工作台（实时分析）、研究报告（按任务查看六阶段报告）、历史任务（列表与筛选）、模拟交易（采纳 PM 结论建仓并按最新行情估值，不接入真实下单）。
 
 ## 代码组织约定
 

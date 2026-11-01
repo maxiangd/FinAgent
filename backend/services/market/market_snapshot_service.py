@@ -175,3 +175,8 @@ def get_snapshot(code: str) -> dict:
         "news": news,
         "meta": {"source": "akshare", "note": "腾讯单只行情 + 巨潮行业/分红 + 新浪财务"},
     }
+
+
+def get_quote(code: str) -> dict:
+    """对外暴露最新报价（价格、涨跌幅、PE、市值等），供模拟交易估值使用。"""
+    return _get_quote_tx(code)

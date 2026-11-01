@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers.analysis_router import router as analysis_router
 from app.routers.health_router import router as health_router
 from app.routers.market_router import router as market_router
+from app.routers.paper_router import router as paper_router
 from app.routers.tasks_router import router as tasks_router
 
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +52,7 @@ app.include_router(health_router)
 app.include_router(market_router)
 app.include_router(analysis_router)
 app.include_router(tasks_router)
+app.include_router(paper_router)
 
 
 if __name__ == "__main__":

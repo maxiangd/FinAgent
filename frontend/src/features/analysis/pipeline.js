@@ -9,6 +9,7 @@ import {
   createAnalysisTask,
   getAnalysisTask,
 } from '../../api/analysis'
+import { taskResultToStages } from './taskResult'
 
 const now = () => {
   const d = new Date()
@@ -265,25 +266,10 @@ function applyStagePayload(stage, payload) {
 }
 
 function applyResult(run) {
-  if (!run) return
-  state.completed.ingest = run.ingestion || null
-  state.completed.analyst = {
-    report: run.market_report,
-    stock_name: run.stock_name,
-    stock_code: run.stock_code,
-    period: run.period,
-    actual_start_date: run.actual_start_date,
-    actual_end_date: run.actual_end_date,
-    model_name: run.model_names?.market,
-    limitations: run.limitations,
-    evidence: run.evidence,
-    fundamental_report: run.fundamental_report,
-    news_report: run.news_report,
-  }
-  state.completed.debate = run.debate_turns?.length ? run.debate_turns : null
-  state.completed.trader = run.trade_proposal || null
-  state.completed.risk = run.risk_reviews?.length ? run.risk_reviews : null
-  state.completed.pm = run.pm_decision || null
+  const stages = taskResultToStages(run)
+  Object.entries(stages).forEach(([key, value]) => {
+    state.completed[key] = value
+  })
   state.finished = true
 }
 
