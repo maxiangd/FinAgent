@@ -86,6 +86,39 @@ npm run dev
 
 Vite 默认运行在 `http://localhost:5173`，并将 `/api` 请求转发给 `127.0.0.1:8000`。
 
+## Docker 部署
+
+需要 Docker + Docker Compose。先在项目根目录准备 `.env`（复制 `.env.example` 并填写模型 API Key），然后：
+
+```bash
+docker compose up -d --build
+```
+
+启动后访问 `http://localhost:8080`；前端容器内的 nginx 会把 `/api/` 转发到后端，SSE 已关闭缓冲和长连接超时，阶段进度可以实时推送。
+
+| 服务 | 说明 |
+| --- | --- |
+| `frontend` | 多阶段构建：Node 编译 Vue 产物，再由 nginx 提供静态文件并反代 `/api` |
+| `backend` | FastAPI + AKShare，单 worker 运行；健康检查走 `/api/health` |
+| `mongo` | 任务与模拟交易持久化，数据保存在 `mongo-data` 卷 |
+| `redis` | 可选缓存，默认不启动；`docker compose --profile redis up -d` 启用，并在 `.env` 设置 `CACHE_BACKEND=redis` |
+
+常用操作：
+
+```bash
+docker compose logs -f backend     # 查看后端日志
+docker compose down                # 停止服务，保留 Mongo 数据
+docker compose down -v             # 停止并清空 Mongo / Redis 数据
+docker compose up -d --build       # 代码或依赖变更后重新构建并重启
+```
+
+注意：
+
+- `.env` 不会打进镜像，修改模型 Key 后执行 `docker compose up -d` 让容器重新读取即可，无需重建镜像。
+- 容器时区固定为 `Asia/Shanghai`，避免 `date.today()` 在东八区凌晨取到前一天。
+- 后端必须保持单 worker：任务状态和事件流保存在进程内，多 worker 会出现「同一个任务在不同进程里查不到」。需要横向扩展时，应先把 `task_manager` 的任务表迁移到外部存储。
+- 容器内的 `MONGO_URL` / `REDIS_URL` 由 compose 指向 `mongo` / `redis` 服务，会覆盖 `.env` 里的 `127.0.0.1` 地址。
+
 ## 模型配置
 
 在项目根目录 `.env` 里填写提供商的 API Key，页面「分析区间」右侧的下拉框只会出现在已配置的那几家；改完需要重启后端。
@@ -152,7 +185,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 
-当前 16 个用例，约 1.5 秒跑完。
+当前 66 个用例，约 2 秒跑完。
 
 ## 评测
 
@@ -181,7 +214,7 @@ python scripts/run_evaluation.py --limit 4   # 不传 --limit 则跑全部样例
 - 行情搜索、快照和日 K 线由 FastAPI 后端通过 AKShare 获取；周/月 K 线取自雪球接口（东财行情接口在部分网络下不可达），腾讯接口作为兜底。
 - 六阶段链路已由 LangGraph 工作流真实执行：数据接入 → 三个分析师 → 多空辩论（3 轮）→ 交易提案 → 三类风控 → PM 决策，全部调用所选大模型；页面点「开始分析」会创建后台任务，通过 SSE 实时更新阶段进度，完成后展示各阶段结果（约 1-2 分钟）。交易提案仅作研究结果，不接入真实下单。
 - 页面展示仅供学习和演示，不构成投资建议。
-- 前端有四个可用页面：投研工作台（实时分析）、研究报告（按任务查看六阶段报告）、历史任务（列表与筛选）、模拟交易（采纳 PM 结论建仓并按最新行情估值，不接入真实下单）。
+- 前端有三个可用页面：投研工作台（实时分析）、任务与报告（任务列表、筛选、六阶段报告与删除）、模拟交易（采纳 PM 结论建仓，支持持有天数与买入后收益回测，不接入真实下单）。
 
 ## 代码组织约定
 
