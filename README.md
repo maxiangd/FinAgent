@@ -5,6 +5,16 @@
 
 A 股行情与多阶段投研流程演示项目。前端使用 Vue 3 + Vite，后端使用 FastAPI + AKShare。
 
+## 界面
+
+| 投研工作台 | 任务与报告 |
+|---|---|
+| ![投研工作台](docs/screenshots/home.png) | ![任务与报告](docs/screenshots/history.png) |
+
+| 模拟交易 |
+|---|
+| ![模拟交易](docs/screenshots/paper.png) |
+
 ## 项目结构
 
 ```text
@@ -188,7 +198,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 
-当前 66 个用例，约 2 秒跑完。
+当前 66 个用例，约 2 秒跑完。GitHub Actions 在每次 push 时运行后端测试与前端构建。
 
 ## 评测
 
