@@ -1,5 +1,8 @@
 # FinAgent Lab
 
+[![CI](https://github.com/maxiangd/FinAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/maxiangd/FinAgent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A 股行情与多阶段投研流程演示项目。前端使用 Vue 3 + Vite，后端使用 FastAPI + AKShare。
 
 ## 项目结构
@@ -225,3 +228,7 @@ python scripts/run_evaluation.py --limit 4   # 不传 --limit 则跑全部样例
 ## 开发路线
 
 真实多智能体工作流的分阶段实施计划见[Agent 工作流实施路线](./docs/AGENT_WORKFLOW_ROADMAP.md)。
+
+## License
+
+[MIT](LICENSE)
